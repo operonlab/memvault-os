@@ -27,12 +27,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app: [api, web, embed-gateway, worker]
+        # worker reuses the api image (compose overrides CMD), so we only
+        # build & push three distinct images.
+        app: [api, web, embed-gateway]
     outputs:
       api-digest: ${{ steps.collect.outputs.api-digest }}
       web-digest: ${{ steps.collect.outputs.web-digest }}
       embed-gateway-digest: ${{ steps.collect.outputs.embed-gateway-digest }}
-      worker-digest: ${{ steps.collect.outputs.worker-digest }}
     steps:
       - uses: actions/checkout@v4
 
