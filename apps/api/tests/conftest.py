@@ -49,12 +49,12 @@ def api_timeout() -> float:
     return float(os.environ.get("MEMVAULT_TEST_TIMEOUT", DEFAULT_TIMEOUT))
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture
 async def httpx_client(api_url: str, api_timeout: float) -> AsyncIterator[httpx.AsyncClient]:
-    """One async client shared across the session.
-
-    `follow_redirects=True` so that trailing-slash quirks don't accidentally
-    mark a route as broken.
+    """One async client per test — function-scoped to align with pytest-asyncio's
+    per-test event loop. Earlier tried session-scoped + loop_scope=session but
+    that conflicted with function-scoped fixtures like `clean_db` that share
+    this client. Per-test cost is ~ms vs local docker, so safer wins over fast.
     """
     async with httpx.AsyncClient(
         base_url=api_url,

@@ -257,7 +257,10 @@ class BaseCRUDService(Generic[ModelT, CreateT, UpdateT, ResponseT]):
         """Write an audit log entry within the current transaction."""
         if not self.audit_module:
             return
-        from src.audit_stub import AuditLog
+        # Codex review #6 (medium): honor MEMVAULT_AUDIT_ENABLED flag.
+        from src.audit_stub import ENABLED as AUDIT_ENABLED, AuditLog
+        if not AUDIT_ENABLED:
+            return
         from src.shared.models import _uuid7_hex
 
         log = AuditLog(

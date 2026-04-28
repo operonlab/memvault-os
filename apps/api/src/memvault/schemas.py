@@ -26,7 +26,9 @@ BLOCK_TYPE_ALIASES: dict[str, str] = {
 
 
 class MemoryBlockCreate(BaseModel):
-    content: str
+    # min_length=1 prevents silently-empty blocks (caught by E2E test
+    # test_block_create_empty_content_rejected — six iron rules #4 regression).
+    content: str = Field(..., min_length=1)
     block_type: str = Field(default="general")
     tags: list[str] = Field(default_factory=list)
     source_session: str | None = Field(default=None)
