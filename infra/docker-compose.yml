@@ -1,0 +1,205 @@
+# memvault-os — main compose stack (v3.2)
+# Network 收斂：只有 web (3000) + api (8080) 對外綁 127.0.0.1
+# Pin 策略：所有 image 用 ${IMAGE}:${VERSION}@${DIGEST}，
+# digest 由 scripts/pin-images.sh 自動更新。
+# 啟動：docker compose -f infra/docker-compose.yml --env-file .env up -d
+
+name: memvault
+
+services:
+  postgres:
+    # TODO digest 由 scripts/pin-images.sh 產生
+    image: pgvector/pgvector:0.8.0-pg16@${PG_DIGEST}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-memvault}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-memvault}
+    expose:
+      - "5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - memvault-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-memvault} -d ${POSTGRES_DB:-memvault}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4.1-alpine@${REDIS_DIGEST}
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
+    expose:
+      - "6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - memvault-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4@${QDRANT_DIGEST}
+    restart: unless-stopped
+    expose:
+      - "6333"
+      - "6334"
+    volumes:
+      - qdrant-storage:/qdrant/storage
+      - ./qdrant/config.yaml:/qdrant/config/production.yaml:ro
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    networks:
+      - memvault-net
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.55.10@${LITELLM_DIGEST}
+    restart: unless-stopped
+    expose:
+      - "4000"
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    networks:
+      - memvault-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health/liveliness"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  embed-gateway:
+    image: ghcr.io/operonlab/memvault-embed-gateway:${VERSION:-latest}@${EMBED_DIGEST}
+    build:
+      context: ../apps/embed-gateway
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8081"
+    environment:
+      EMBED_BACKEND: ${EMBED_BACKEND:-onnx}
+      EMBED_MODEL: ${EMBED_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+      EMBED_DIM: "1024"
+    networks:
+      - memvault-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  api:
+    image: ghcr.io/operonlab/memvault-api:${VERSION:-latest}@${API_DIGEST}
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-memvault}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-memvault}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      EMBED_BASE_URL: http://embed-gateway:8081
+      LITELLM_BASE: http://litellm:4000/v1
+      LITELLM_KEY: ${LITELLM_MASTER_KEY}
+      MEMVAULT_SECRET_KEY: ${MEMVAULT_SECRET_KEY}
+      MEMVAULT_AUTH_MODE: ${MEMVAULT_AUTH_MODE:-single}
+      MEMVAULT_AUDIT_ENABLED: ${MEMVAULT_AUDIT_ENABLED:-true}
+      MEMVAULT_FROZEN_TIER: ${MEMVAULT_FROZEN_TIER:-disabled}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      embed-gateway:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    networks:
+      - memvault-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    image: ghcr.io/operonlab/memvault-api:${VERSION:-latest}@${API_DIGEST}
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "apps.worker.main"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-memvault}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-memvault}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      EMBED_BASE_URL: http://embed-gateway:8081
+      LITELLM_BASE: http://litellm:4000/v1
+      LITELLM_KEY: ${LITELLM_MASTER_KEY}
+      MEMVAULT_SECRET_KEY: ${MEMVAULT_SECRET_KEY}
+      MEMVAULT_AUDIT_ENABLED: ${MEMVAULT_AUDIT_ENABLED:-true}
+      MEMVAULT_FROZEN_TIER: ${MEMVAULT_FROZEN_TIER:-disabled}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      embed-gateway:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    networks:
+      - memvault-net
+
+  web:
+    image: ghcr.io/operonlab/memvault-web:${VERSION:-latest}@${WEB_DIGEST}
+    build:
+      context: ../apps/web
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - memvault-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:80/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  redis-data:
+  qdrant-storage:
+
+networks:
+  memvault-net:
+    driver: bridge

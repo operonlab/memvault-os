@@ -1,0 +1,45 @@
+# GPU override — 啟動 vllm container，embed-gateway 切 vllm_proxy
+# 前置：Linux 需 nvidia-container-toolkit；Windows 需 WSL2 + WSL CUDA
+# 啟動：docker compose -f infra/docker-compose.yml -f infra/docker-compose.gpu.yml --env-file .env up -d
+
+services:
+  vllm:
+    image: vllm/vllm-openai:v0.6.4.post1@${VLLM_DIGEST}
+    restart: unless-stopped
+    command:
+      - --model
+      - Qwen/Qwen3-Embedding-0.6B
+      - --task
+      - embed
+      - --port
+      - "8000"
+    expose:
+      - "8000"
+    volumes:
+      - vllm-cache:/root/.cache/huggingface
+    networks:
+      - memvault-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
+
+  embed-gateway:
+    environment:
+      EMBED_BACKEND: vllm_proxy
+      VLLM_BASE_URL: http://vllm:8000/v1
+    depends_on:
+      vllm:
+        condition: service_healthy
+
+volumes:
+  vllm-cache:

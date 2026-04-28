@@ -1,0 +1,60 @@
+/* Memvault — Midnight Neural Theme
+   Scoped under .memvault to avoid conflicts with global Catppuccin theme.
+   Overrides Catppuccin CSS variables so existing components auto-adapt.
+   Palette: deep midnight indigo base + original Catppuccin accent vibrancy. */
+
+.memvault {
+  /* Base surfaces — midnight indigo character */
+  --base: #151726;
+  --mantle: #121422;
+  --crust: #0f111e;
+
+  /* Elevated surfaces — proper contrast steps from base */
+  --surface0: #282b48;
+  --surface1: #3a3e65;
+  --surface2: #4c5180;
+
+  /* Text hierarchy — match global Catppuccin for consistency */
+  --text: #cdd6f4;
+  --subtext0: #a6adc8;
+  --subtext1: #868cae;
+
+  /* Accent colors — restored to original Catppuccin Mocha palette */
+  --blue: #bdd4fa;
+  --lavender: #b4befe;
+  --accent: #b4befe;
+  --green: #a6e3a1;
+  --red: #f38ba8;
+  --mauve: #cba6f7;
+  --peach: #fab387;
+  --yellow: #f9e2af;
+  --teal: #94e2d5;
+  --sky: #89dceb;
+  --flamingo: #f2cdcd;
+  --maroon: #eba0ac;
+
+  /* Apply base styles */
+  background-color: var(--base);
+  color: var(--text);
+  font-family: "Inter", system-ui, sans-serif;
+  min-height: 100%;
+}
+
+/* Scrollbar styling */
+.memvault ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.memvault ::-webkit-scrollbar-track {
+  background: var(--base);
+}
+
+.memvault ::-webkit-scrollbar-thumb {
+  background: var(--surface1);
+  border-radius: 3px;
+}
+
+.memvault ::-webkit-scrollbar-thumb:hover {
+  background: var(--subtext1);
+}

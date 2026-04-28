@@ -1,0 +1,43 @@
+# LiteLLM proxy config — memvault-os
+# 使用者填 .env 任一條 provider key 即生效；未配置 key 的 alias 會被 LiteLLM 自動隱藏。
+# 至少必須通過一條真實 model call smoke test，installer 會強制驗證。
+
+model_list:
+  # OpenAI
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Anthropic
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # Google Gemini
+  - model_name: gemini-2.0-flash
+    litellm_params:
+      model: gemini/gemini-2.0-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  # DeepSeek
+  - model_name: deepseek-chat
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  # Local Ollama (host)
+  - model_name: qwen-flash
+    litellm_params:
+      model: ollama_chat/qwen2.5:7b
+      api_base: http://host.docker.internal:11434
+
+litellm_settings:
+  drop_params: true
+  set_verbose: false
+  telemetry: false
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: ""  # in-memory; 不需 persist

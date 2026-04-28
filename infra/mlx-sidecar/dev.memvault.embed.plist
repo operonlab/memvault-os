@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  memvault MLX embedding sidecar — LaunchAgent (macOS only)
+  install-launchagent.sh 會把這份檔搬到 ~/Library/LaunchAgents/ 並做 envsubst
+  替換 __VENV__ / __WORKER__ / __HOME__。
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.memvault.embed</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__VENV__/bin/python3</string>
+        <string>__WORKER__</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MLX_HOST</key>
+        <string>127.0.0.1</string>
+        <key>MLX_PORT</key>
+        <string>18081</string>
+        <key>MLX_EMBED_MODEL</key>
+        <string>mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/memvault-embed.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/memvault-embed.err.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>__HOME__</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

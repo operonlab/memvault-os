@@ -1,0 +1,22 @@
+# Qdrant config — memvault-os dev defaults
+# Single-node local install，記憶體與 segment 設保守值
+# Ref: https://qdrant.tech/documentation/guides/configuration/
+
+storage:
+  storage_path: /qdrant/storage
+  optimizers:
+    default_segment_number: 2
+    max_segment_size_kb: 200000
+    memmap_threshold_kb: 50000
+    indexing_threshold_kb: 20000
+
+service:
+  host: "0.0.0.0"
+  http_port: 6333
+  grpc_port: 6334
+  enable_cors: true
+
+cluster:
+  enabled: false
+
+telemetry_disabled: true
