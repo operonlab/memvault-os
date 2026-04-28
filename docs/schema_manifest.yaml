@@ -1,0 +1,500 @@
+# memvault-os schema manifest (V1 frozen)
+# Total: 17 tables
+# Auto-generated — fresh baseline migration source of truth
+
+tables:
+- table: blocks
+  class: MemoryBlock
+  source: models.py:18
+  columns:
+  - name: source_session
+    decl: 'source_session: Mapped[str | None] = mapped_column(String(64), nullable=True)'
+  - name: content
+    decl: 'content: Mapped[str] = mapped_column(Text)'
+  - name: block_type
+    decl: 'block_type: Mapped[str] = mapped_column( String(50), server_default=text("''general''") )  # knowledge | skill | attitude | general'
+  - name: tags
+    decl: 'tags: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default=text("''{}''::text[]"))'
+  - name: confidence
+    decl: 'confidence: Mapped[float | None] = mapped_column(Float, nullable=True)'
+  - name: invalid_at
+    decl: 'invalid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)'
+  - name: superseded_by
+    decl: 'superseded_by: Mapped[str | None] = mapped_column(String(32), nullable=True)'
+  - name: invalidation_reason
+    decl: 'invalidation_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)'
+  - name: access_count
+    decl: 'access_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))'
+  - name: last_accessed_at
+    decl: 'last_accessed_at: Mapped[datetime | None] = mapped_column( DateTime(timezone=True), nullable=True )'
+  - name: fold_id
+    decl: 'fold_id: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)'
+  - name: content_hash
+    decl: 'content_hash: Mapped[str | None] = mapped_column(String(16), nullable=True)'
+  - name: status
+    decl: 'status: Mapped[str] = mapped_column( String(32), server_default=text("''active''"), nullable=False )'
+  indexes:
+  - name: idx_blocks_tags
+    columns:
+    - tags
+  - name: idx_blocks_type
+    columns:
+    - block_type
+  - name: idx_blocks_session
+    columns:
+    - source_session
+- table: blocks_archive
+  class: BlockArchive
+  source: models.py:56
+  columns:
+  - name: id
+    decl: 'id: Mapped[str] = mapped_column(String(32), primary_key=True)'
+  - name: space_id
+    decl: 'space_id: Mapped[str] = mapped_column(String(32))'
+  - name: created_by
+    decl: 'created_by: Mapped[str | None] = mapped_column(String(32), nullable=True)'
+  - name: created_at
+    decl: 'created_at: Mapped[str] = mapped_column(Text)'
+  - name: updated_at
+    decl: 'updated_at: Mapped[str] = mapped_column(Text)'
+  - name: source_session
+    decl: 'source_session: Mapped[str | None] = mapped_column(String(64), nullable=True)'
+  - name: content
+    decl: 'content: Mapped[str] = mapped_column(Text)  # may be S3 ref for COLD-BLOB'
+  - name: block_type
+    decl: 'block_type: Mapped[str] = mapped_column(String(50))'
+  - name: tags
+    decl: 'tags: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default=text("''{}''::text[]"))'
+  - name: confidence
+    decl: 'confidence: Mapped[float | None] = mapped_column(Float, nullable=True)'
+  - name: archived_at
+    decl: 'archived_at: Mapped[str] = mapped_column(Text)'
+  - name: archive_type
+    decl: 'archive_type: Mapped[str] = mapped_column( String(20), server_default=text("''cold-archive''") )  # cold-archive | cold-blob'
+  indexes:
+  - name: idx_ba_tags
+    columns:
+    - tags
+  - name: idx_ba_type
+    columns:
+    - block_type
+  - name: idx_ba_created
+    columns:
+    - created_at
+  - name: idx_ba_archived
+    columns:
+    - archived_at
+- table: tags
+  class: Tag
+  source: models.py:88
+  columns:
+  - name: name
+    decl: 'name: Mapped[str] = mapped_column(String(200))'
+  - name: usage_count
+    decl: 'usage_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))'
+  indexes:
+  - name: idx_tags_name
+    columns:
+    - space_id
+    - name
+- table: knowledge_domains
+  class: KnowledgeDomain
+  source: models.py:101
+  columns:
+  - name: name
+    decl: 'name: Mapped[str] = mapped_column(String(200))'
+  - name: description
+    decl: 'description: Mapped[str | None] = mapped_column(Text, nullable=True)'
+  - name: maturity
+    decl: 'maturity: Mapped[float] = mapped_column(Float, server_default=text("0.0"))'
+  - name: block_count
+    decl: 'block_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))'
+  indexes:
+  - name: idx_kd_name
+    columns:
+    - space_id
+    - name
+- table: profile_scores
+  class: ProfileScore
+  source: models.py:116
+  columns:
+  - name: knowledge_score
+    decl: 'knowledge_score: Mapped[float] = mapped_column(Float, server_default=text("0.0"))'
+  - name: attitude_score
+    decl: 'attitude_score: Mapped[float] = mapped_column(Float, server_default=text("0.0"))'
+  - name: skill_score
+    decl: 'skill_score: Mapped[float] = mapped_column(Float, server_default=text("0.0"))'
+  indexes:
+  - name: idx_profile_scores_space
+    columns:
+    - space_id
+- table: search_feedback
+  class: SearchFeedback
+  source: models.py:133
+  columns:
+  - name: entity_id
+    decl: 'entity_id: Mapped[str] = mapped_column(String(32))  # block ID that was rated'
+  - name: query_hash
+    decl: 'query_hash: Mapped[str] = mapped_column(String(64))  # SHA-256 of query text'
+  - name: signal
+    decl: 'signal: Mapped[str] = mapped_column(String(20))  # positive | negative'
+  - name: feedback_source
+    decl: 'feedback_source: Mapped[str] = mapped_column( String(20), server_default=text("''agent''") )  # agent | user | implicit'
+  indexes:
+  - name: idx_sf_entity
+    columns:
+    - entity_id
+  - name: idx_sf_query_hash
+    columns:
+    - query_hash
+  - name: idx_sf_entity_signal
+    columns:
+    - entity_id
+    - signal
+- table: query_journal
+  class: QueryJournal
+  source: models.py:159
+  columns:
+  - name: query_text
+    decl: 'query_text: Mapped[str] = mapped_column(Text)'
+  - name: query_hash
+    decl: 'query_hash: Mapped[str] = mapped_column(String(64))  # SHA-256'
+  - name: routing_intent
+    decl: 'routing_intent: Mapped[str | None] = mapped_column(String(50), nullable=True)'
+  - name: routing_confidence
+    decl: 'routing_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)'
+  - name: layers_searched
+    decl: 'layers_searched: Mapped[list[str]] = mapped_column( ARRAY(Text), server_default=text("''{}''::text[]") )'
+  - name: result_count
+    decl: 'result_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))'
+  - name: evaluation_verdict
+    decl: 'evaluation_verdict: Mapped[str | None] = mapped_column(String(20), nullable=True)'
+  - name: evaluation_score
+    decl: 'evaluation_score: Mapped[float | None] = mapped_column(Float, nullable=True)'
+  - name: top_entity_ids
+    decl: 'top_entity_ids: Mapped[list[str]] = mapped_column( ARRAY(Text), server_default=text("''{}''::text[]") )'
+  - name: session_id
+    decl: 'session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)'
+  indexes:
+  - name: idx_qj_query_hash
+    columns:
+    - query_hash
+  - name: idx_qj_space_created
+    columns:
+    - space_id
+    - created_at
+  - name: idx_qj_routing_intent
+    columns:
+    - routing_intent
+- table: interest_snapshots
+  class: InterestSnapshot
+  source: models.py:192
+  columns:
+  - name: snapshot_date
+    decl: 'snapshot_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))'
+  - name: period
+    decl: 'period: Mapped[str] = mapped_column(String(20))  # daily | weekly | monthly'
+  - name: top_intents
+    decl: 'top_intents: Mapped[dict | None] = mapped_column(JSONB, nullable=True)'
+  - name: top_entities
+    decl: 'top_entities: Mapped[list | None] = mapped_column(JSONB, nullable=True)'
+  - name: top_communities
+    decl: 'top_communities: Mapped[list | None] = mapped_column(JSONB, nullable=True)'
+  - name: knowledge_gaps
+    decl: 'knowledge_gaps: Mapped[list | None] = mapped_column(JSONB, nullable=True)'
+  - name: attention_profile
+    decl: 'attention_profile: Mapped[dict | None] = mapped_column(JSONB, nullable=True)'
+  - name: query_volume
+    decl: 'query_volume: Mapped[int] = mapped_column(Integer, server_default=text("0"))'
+  - name: avg_result_quality
+    decl: 'avg_result_quality: Mapped[float | None] = mapped_column(Float, nullable=True)'
+  indexes:
+  - name: idx_is_space_date
+    columns:
+    - space_id
+    - snapshot_date
+  - name: idx_is_period
+    columns:
+    - period
+- table: memory_block
+  class: MemoryBlockSnapshot
+  source: models.py:219
+  columns:
+  - name: block_type
+    decl: 'block_type: Mapped[str] = mapped_column(String(32))  # persona | human | project'
+  - name: content
+    decl: 'content: Mapped[str | None] = mapped_column(Text, nullable=True)'
+  - name: word_count
+    decl: 'word_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))'
+  - name: block_version
+    decl: 'block_version: Mapped[int] = mapped_column(Integer, server_default=text("1"))'
+  indexes:
+  - name: uq_memory_block_space_type_active
+    columns:
+    - space_id
+    - block_type
+  - name: idx_memory_block_type
+    columns:
+    - block_type
+- table: blocks_frozen
+  class: BlockFrozen
+  source: models.py:249
+  columns:
+  - name: id
+    decl: 'id: Mapped[str] = mapped_column(String(32), primary_key=True)'
+  - name: space_id
+    decl: 'space_id: Mapped[str] = mapped_column(String(32))'
+  - name: created_by
+    decl: 'created_by: Mapped[str | None] = mapped_column(String(32), nullable=True)'
+  - name: created_at
+    decl: 'created_at: Mapped[str] = mapped_column(Text)'
+  - name: archived_at
+    decl: 'archived_at: Mapped[str] = mapped_column(Text)'
+  - name: frozen_at
+    decl: 'frozen_at: Mapped[str] = mapped_column(Text)'
+  - name: block_type
+    decl: 'block_type: Mapped[str] = mapped_column(String(50))'
+  - name: tags
+    decl: 'tags: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default=text("''{}''::text[]"))'
+  - name: source_session
+    decl: 'source_session: Mapped[str | None] = mapped_column(String(64), nullable=True)'
+  - name: summary
+    decl: 'summary: Mapped[str | None] = mapped_column(Text, nullable=True)'
+  - name: s3_uri
+    decl: 's3_uri: Mapped[str] = mapped_column(Text)'
+  - name: content_hash
+    decl: 'content_hash: Mapped[str] = mapped_column(String(64))'
+  - name: content_size
+    decl: 'content_size: Mapped[int | None] = mapped_column(Integer, nullable=True)'
+  indexes:
+  - name: idx_bf_space_created
+    columns:
+    - space_id
+    - created_at
+  - name: idx_bf_tags
+    columns:
+    - tags
+  - name: idx_bf_frozen
+    columns:
+    - frozen_at
+  - name: idx_bf_type
+    columns:
+    - block_type
+- table: entity_canonicals
+  class: EntityCanonical
+  source: kg_models.py:41
+  columns:
+  - name: canonical_name
+    decl: 'canonical_name: Mapped[str] = mapped_column(String(500))'
+  - name: aliases
+    decl: 'aliases: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default=text("''{}''::text[]"))'
+  - name: entity_type
+    decl: 'entity_type: Mapped[str] = mapped_column( String(50), server_default=text("''concept''") )  # concept | tool | person | org | language'
+  - name: merge_count
+    decl: 'merge_count: Mapped[int] = mapped_column(Integer, server_default=text("1"))'
+  indexes:
+  - name: idx_ec_canonical_name
+    columns:
+    - space_id
+    - canonical_name
+  - name: idx_ec_entity_type
+    columns:
+    - entity_type
+  - name: idx_ec_aliases
+    columns:
+    - aliases
+- table: entity_edges
+  class: EntityEdge
+  source: kg_models.py:65
+  columns:
+  - name: entity_a_id
+    decl: 'entity_a_id: Mapped[str] = mapped_column( String(32), ForeignKey(f"{SCHEMA}.entity_canonicals.id"), nullable=False )'
+  - name: entity_b_id
+    decl: 'entity_b_id: Mapped[str] = mapped_column( String(32), ForeignKey(f"{SCHEMA}.entity_canonicals.id"), nullable=False )'
+  - name: cooccurrence_count
+    decl: 'cooccurrence_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))'
+  - name: session_overlap
+    decl: 'session_overlap: Mapped[float] = mapped_column(Float, server_default=text("0.0"))'
+  - name: adamic_adar
+    decl: 'adamic_adar: Mapped[float] = mapped_column(Float, server_default=text("0.0"))'
+  - name: type_affinity
+    decl: 'type_affinity: Mapped[float] = mapped_column(Float, server_default=text("0.0"))'
+  - name: semantic_similarity
+    decl: 'semantic_similarity: Mapped[float] = mapped_column(Float, server_default=text("0.0"))'
+  - name: composite_weight
+    decl: 'composite_weight: Mapped[float] = mapped_column(Float, server_default=text("0.0"))'
+  - name: last_computed_at
+    decl: 'last_computed_at: Mapped[datetime | None] = mapped_column( DateTime(timezone=True), nullable=True )'
+  indexes:
+  - name: idx_ee_weight
+    columns:
+    - composite_weight
+  - name: idx_ee_entities
+    columns:
+    - entity_a_id
+    - entity_b_id
+  - name: idx_ee_space
+    columns:
+    - space_id
+- table: triples
+  class: Triple
+  source: kg_models.py:109
+  columns:
+  - name: source_session
+    decl: 'source_session: Mapped[str | None] = mapped_column(String(64), nullable=True)'
+  - name: timestamp
+    decl: 'timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)'
+  - name: subject
+    decl: 'subject: Mapped[str] = mapped_column(String(500))'
+  - name: predicate
+    decl: 'predicate: Mapped[str] = mapped_column(String(100))'
+  - name: object
+    decl: 'object: Mapped[str] = mapped_column(Text)'
+  - name: topic
+    decl: 'topic: Mapped[str | None] = mapped_column(String(500), nullable=True)'
+  - name: display_zh
+    decl: 'display_zh: Mapped[str | None] = mapped_column(Text, nullable=True)'
+  - name: valid_at
+    decl: 'valid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)'
+  - name: invalid_at
+    decl: 'invalid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)'
+  - name: invalidated_by
+    decl: 'invalidated_by: Mapped[str | None] = mapped_column( String(32), ForeignKey(f"{SCHEMA}.triples.id"), nullable=True )  # ID of newer triple that superseded this one; NULL = valid'
+  - name: invalidation_reason
+    decl: 'invalidation_reason: Mapped[str | None] = mapped_column( String(50), nullable=True )  # contradiction | manual | correction'
+  - name: canonical_subject_id
+    decl: 'canonical_subject_id: Mapped[str | None] = mapped_column( String(32), ForeignKey(f"{SCHEMA}.entity_canonicals.id"), nullable=True )'
+  - name: canonical_object_id
+    decl: 'canonical_object_id: Mapped[str | None] = mapped_column( String(32), ForeignKey(f"{SCHEMA}.entity_canonicals.id"), nullable=True )'
+  - name: access_count
+    decl: 'access_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))'
+  - name: last_accessed_at
+    decl: 'last_accessed_at: Mapped[datetime | None] = mapped_column( DateTime(timezone=True), nullable=True )'
+  indexes:
+  - name: idx_triples_session
+    columns:
+    - source_session
+  - name: idx_triples_predicate
+    columns:
+    - predicate
+  - name: idx_triples_subject
+    columns:
+    - subject
+  - name: idx_triples_object
+    columns:
+    - object
+  - name: idx_triples_valid
+    columns:
+    - space_id
+- table: communities
+  class: Community
+  source: kg_models.py:169
+  columns:
+  - name: name
+    decl: 'name: Mapped[str] = mapped_column(String(300))'
+  - name: resolution_level
+    decl: 'resolution_level: Mapped[int] = mapped_column(Integer)  # 0=fine, 1=medium, 2=coarse'
+  - name: size
+    decl: 'size: Mapped[int] = mapped_column(Integer, server_default=text("0"))'
+  - name: entity_ids
+    decl: 'entity_ids: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)'
+  - name: top_entities
+    decl: 'top_entities: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)'
+  - name: top_predicates
+    decl: 'top_predicates: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)'
+  - name: summary
+    decl: 'summary: Mapped[str | None] = mapped_column(Text, nullable=True)'
+  - name: description_zh
+    decl: 'description_zh: Mapped[str | None] = mapped_column(Text, nullable=True)'
+  - name: parent_community_id
+    decl: 'parent_community_id: Mapped[str | None] = mapped_column( String(32), ForeignKey(f"{SCHEMA}.communities.id"), nullable=True )'
+  - name: generation_batch
+    decl: 'generation_batch: Mapped[str | None] = mapped_column(String(32), nullable=True)'
+  - name: modularity_score
+    decl: 'modularity_score: Mapped[float | None] = mapped_column(Float, nullable=True)'
+  - name: access_count
+    decl: 'access_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))'
+  - name: last_accessed_at
+    decl: 'last_accessed_at: Mapped[datetime | None] = mapped_column( DateTime(timezone=True), nullable=True )'
+  indexes:
+  - name: idx_communities_level
+    columns:
+    - resolution_level
+  - name: idx_communities_parent
+    columns:
+    - parent_community_id
+- table: community_triples
+  class: CommunityTriple
+  source: kg_models.py:211
+  columns:
+  - name: community_id
+    decl: 'community_id: Mapped[str] = mapped_column( String(32), ForeignKey(f"{SCHEMA}.communities.id"), nullable=False )'
+  - name: triple_id
+    decl: 'triple_id: Mapped[str] = mapped_column( String(32), ForeignKey(f"{SCHEMA}.triples.id"), nullable=False )'
+  indexes:
+  - name: idx_community_triples_community
+    columns:
+    - community_id
+  - name: idx_community_triples_triple
+    columns:
+    - triple_id
+- table: community_summaries
+  class: CommunitySummary
+  source: kg_models.py:234
+  columns:
+  - name: community_id
+    decl: 'community_id: Mapped[str] = mapped_column( String(32), ForeignKey(f"{SCHEMA}.communities.id"), nullable=False )'
+  - name: summary
+    decl: 'summary: Mapped[str] = mapped_column(Text)'
+  - name: key_findings
+    decl: 'key_findings: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)'
+  - name: representative_triples
+    decl: 'representative_triples: Mapped[list[str] | None] = mapped_column( ARRAY(Text), nullable=True )  # top 3-5 triple texts'
+  - name: evidence_count
+    decl: 'evidence_count: Mapped[int | None] = mapped_column(Integer, nullable=True)'
+  - name: tags
+    decl: 'tags: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)'
+  - name: llm_model
+    decl: 'llm_model: Mapped[str | None] = mapped_column(String(100), nullable=True)'
+  - name: generation_batch
+    decl: 'generation_batch: Mapped[str | None] = mapped_column(String(32), nullable=True)'
+  indexes:
+  - name: idx_community_summaries_community
+    columns:
+    - community_id
+- table: audit_logs
+  class: AuditLog
+  source: mirror of admin/models.py:15
+  columns:
+  - name: user_id
+    decl: 'user_id: Mapped[str | None] = mapped_column(String(32), nullable=True)'
+  - name: module
+    decl: 'module: Mapped[str] = mapped_column(Text, nullable=False)'
+  - name: entity_type
+    decl: 'entity_type: Mapped[str] = mapped_column(Text, nullable=False)'
+  - name: entity_id
+    decl: 'entity_id: Mapped[str] = mapped_column(String(32), nullable=False)'
+  - name: space_id
+    decl: 'space_id: Mapped[str | None] = mapped_column(String(32), nullable=True)'
+  - name: action
+    decl: 'action: Mapped[str] = mapped_column( Text, nullable=False )  # created / updated / deleted / restored / purged'
+  - name: changes
+    decl: 'changes: Mapped[dict | None] = mapped_column(JSONB, nullable=True)'
+  - name: snapshot
+    decl: 'snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)'
+  indexes:
+  - name: idx_audit_entity
+    columns:
+    - module
+    - entity_type
+    - entity_id
+  - name: idx_audit_user
+    columns:
+    - user_id
+  - name: idx_audit_created
+    columns:
+    - '?'
+  - name: idx_audit_space
+    columns:
+    - space_id
+  note: Mirrored from monorepo admin.AuditLog (9 columns) — required by BaseCRUDService._record_audit()
