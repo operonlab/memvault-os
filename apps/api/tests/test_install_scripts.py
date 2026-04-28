@@ -204,6 +204,55 @@ def test_pin_images_refs_match_compose_tags():
 
 
 # ---------------------------------------------------------------------------
+# Bug H — alembic env.py must run CREATE SCHEMA inside begin_transaction()
+# ---------------------------------------------------------------------------
+def test_alembic_env_creates_schema_inside_transaction():
+    """alembic env.py do_run_migrations must keep CREATE SCHEMA inside the
+    `with context.begin_transaction():` block.
+
+    Why: SQLAlchemy 2.x sync Connection auto-begins a transaction on the
+    first execute() call. If we run `CREATE SCHEMA` before
+    `begin_transaction()`, that auto-begun tx (T1) is already open, alembic's
+    begin_transaction sees in-transaction and becomes a no-op, and when
+    `async with connectable.connect()` releases the connection, SQLAlchemy
+    rolls back any pending transaction — silently discarding all migration
+    DDL. Symptom: `alembic upgrade head` exits 0 and prints "Running upgrade",
+    but 0 tables get created and `alembic_version` does not exist.
+
+    Static check: do_run_migrations must contain `CREATE SCHEMA` only after
+    the `with context.begin_transaction()` line, not before.
+    """
+    env_py = (REPO_ROOT / "apps" / "api" / "alembic" / "env.py").read_text()
+    fn = re.search(
+        r"def do_run_migrations\([^)]*\)[^:]*:(.+?)(?=^def |\Z)",
+        env_py,
+        re.M | re.S,
+    )
+    assert fn, "alembic/env.py: do_run_migrations() not found"
+    body = fn.group(1)
+    # Strip comments so we don't match the prose explanation that itself
+    # mentions "CREATE SCHEMA" / "begin_transaction()" verbatim.
+    body_no_comments = re.sub(r"#[^\n]*", "", body)
+    txn_match = re.search(r"context\.begin_transaction\(\)", body_no_comments)
+    schema_match = re.search(
+        r"connection\.execute\([^)]*CREATE\s+SCHEMA",
+        body_no_comments,
+    )
+    assert txn_match, (
+        "do_run_migrations must call context.begin_transaction()"
+    )
+    assert schema_match, (
+        "do_run_migrations must call connection.execute(... CREATE SCHEMA ...)"
+    )
+    assert schema_match.start() > txn_match.start(), (
+        "CREATE SCHEMA must be INSIDE the begin_transaction() block, "
+        "not before it. Otherwise the auto-begun transaction prevents "
+        "alembic from owning a transaction it can commit, and the async "
+        "connection release rolls back all migration DDL silently."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Bug G — wait_for_healthy must not require litellm
 # ---------------------------------------------------------------------------
 def test_wait_for_healthy_treats_litellm_as_optional():

@@ -75,11 +75,7 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection) -> None:
-    # Ensure schema exists before running migrations. infra/postgres/init.sql
-    # creates this on first docker compose up, but CI/test runners that point
-    # alembic at a fresh DB skip init.sql — so bootstrap defensively here.
     from sqlalchemy import text
-    connection.execute(text("CREATE SCHEMA IF NOT EXISTS memvault"))
 
     context.configure(
         connection=connection,
@@ -88,7 +84,19 @@ def do_run_migrations(connection) -> None:
         include_object=_include_object,
         version_table_schema="memvault",
     )
+    # WHY all DDL inside begin_transaction(): SQLAlchemy 2.x sync `Connection`
+    # auto-begins a transaction on the first execute() call. If we run
+    # `CREATE SCHEMA` BEFORE `begin_transaction()`, that auto-begun tx (T1)
+    # is already open, so alembic's begin_transaction becomes a no-op (it
+    # sees the connection is already in-transaction). When the async
+    # `async with connectable.connect()` releases the connection,
+    # SQLAlchemy rolls back any pending transaction → all migration DDL
+    # is silently rolled back. The fix: do everything inside the
+    # `begin_transaction()` block which alembic owns and commits on exit.
     with context.begin_transaction():
+        # Ensure schema exists before running migrations (CI / fresh installs
+        # skip infra/postgres/init.sql which would otherwise pre-create it).
+        connection.execute(text("CREATE SCHEMA IF NOT EXISTS memvault"))
         context.run_migrations()
 
 
