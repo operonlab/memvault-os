@@ -75,6 +75,12 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection) -> None:
+    # Ensure schema exists before running migrations. infra/postgres/init.sql
+    # creates this on first docker compose up, but CI/test runners that point
+    # alembic at a fresh DB skip init.sql — so bootstrap defensively here.
+    from sqlalchemy import text
+    connection.execute(text("CREATE SCHEMA IF NOT EXISTS memvault"))
+
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
