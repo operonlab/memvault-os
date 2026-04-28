@@ -67,6 +67,17 @@ class _Channel:
     def subscribe(self, handler: Handler) -> Callable[[], None]:
         return self._bus.subscribe(self._event_type, handler)
 
+    # Monorepo channel exposes both `.subscribe` and `.subscribe_handler` —
+    # mirror the alias so shared/cache.py register_invalidation() works.
+    subscribe_handler = subscribe
+
+    # Reactive-style chain (RxPY-like). In v1 OS we degrade to no-op chain:
+    # operators are recorded but not applied. Direct subscribe still works
+    # for the underlying event_type. Core CRUD doesn't depend on reactive flows.
+    def pipe(self, *operators) -> "_Channel":
+        # Return self so downstream `.subscribe(...)` keeps the same channel.
+        return self
+
 
 class EventBus:
     def __init__(self) -> None:

@@ -31,6 +31,15 @@ dependencies = [
   "snowballstemmer>=2.2",
   # IDs
   "uuid-utils>=0.9",
+  # Logging / utilities
+  "structlog>=24.1",
+  "tenacity>=8.5",
+  "python-dateutil>=2.9",
+  "pyyaml>=6.0",
+  # LLM provider aggregation (fallback / direct usage by KG auto-evolve)
+  "litellm>=1.55",
+  # Worker scheduler
+  "apscheduler>=3.10",
 ]
 
 [project.optional-dependencies]

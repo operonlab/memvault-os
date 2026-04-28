@@ -1,0 +1,32 @@
+# Dev override: build our own images locally instead of pulling from ghcr.
+# Use:
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml \
+#     --env-file .env up -d --build
+#
+# In this mode the *_DIGEST placeholder values in .env are ignored (build
+# context wins over `image: tag@digest`).
+
+services:
+  api:
+    image: memvault-api:dev
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+
+  worker:
+    image: memvault-api:dev
+    build:
+      context: ../apps/api
+      dockerfile: Dockerfile
+
+  web:
+    image: memvault-web:dev
+    build:
+      context: ../apps/web
+      dockerfile: Dockerfile
+
+  embed-gateway:
+    image: memvault-embed-gateway:dev
+    build:
+      context: ../apps/embed-gateway
+      dockerfile: Dockerfile

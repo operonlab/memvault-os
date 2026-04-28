@@ -9,15 +9,23 @@ Usage in memvault code (unchanged):
 
 from __future__ import annotations
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Standalone settings — accepts BOTH `MEMVAULT_*` (preferred) and the
+    short, unprefixed names compose passes (e.g. `DATABASE_URL`, `REDIS_URL`).
+    Fixed by codex review (config_stub aliases) — without these aliases,
+    compose env was being silently ignored and Settings fell back to localhost.
+    """
+
     model_config = SettingsConfigDict(
         env_prefix="MEMVAULT_",
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     # Server
@@ -25,22 +33,43 @@ class Settings(BaseSettings):
     port: int = 10000
     debug: bool = False
 
-    # Database & Cache
-    db_url: str = "postgresql+asyncpg://memvault:memvault@localhost:5432/memvault"
-    redis_url: str = "redis://localhost:6379/0"
+    # Database & Cache — accept both MEMVAULT_DB_URL and DATABASE_URL
+    db_url: str = Field(
+        default="postgresql+asyncpg://memvault:memvault@localhost:5432/memvault",
+        validation_alias=AliasChoices("MEMVAULT_DB_URL", "DATABASE_URL"),
+    )
+    redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        validation_alias=AliasChoices("MEMVAULT_REDIS_URL", "REDIS_URL"),
+    )
 
     # Vector store
-    qdrant_url: str = "http://localhost:6333"
-    qdrant_api_key: str = ""
+    qdrant_url: str = Field(
+        default="http://localhost:6333",
+        validation_alias=AliasChoices("MEMVAULT_QDRANT_URL", "QDRANT_URL"),
+    )
+    qdrant_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("MEMVAULT_QDRANT_API_KEY", "QDRANT_API_KEY"),
+    )
 
-    # Embedding service
-    embed_base_url: str = "http://localhost:11434"  # Ollama-compatible endpoint
-    embed_model: str = "nomic-embed-text"
-    embed_dim: int = 768
+    # Embedding service — default updated to embed-gateway 1024d
+    embed_base_url: str = Field(
+        default="http://embed-gateway:8081",
+        validation_alias=AliasChoices("MEMVAULT_EMBED_BASE_URL", "EMBED_BASE_URL"),
+    )
+    embed_model: str = "Qwen/Qwen3-Embedding-0.6B"
+    embed_dim: int = 1024
 
     # LLM (LiteLLM proxy)
-    litellm_base: str = "http://localhost:4000"
-    litellm_key: str = ""
+    litellm_base: str = Field(
+        default="http://litellm:4000/v1",
+        validation_alias=AliasChoices("MEMVAULT_LITELLM_BASE", "LITELLM_BASE"),
+    )
+    litellm_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("MEMVAULT_LITELLM_KEY", "LITELLM_KEY", "LITELLM_MASTER_KEY"),
+    )
     llm_default_model: str = "gpt-4o-mini"
 
     # Security

@@ -64,12 +64,16 @@ services:
       retries: 10
 
   litellm:
-    image: ghcr.io/berriai/litellm:v1.55.10@${LITELLM_DIGEST}
+    image: ghcr.io/berriai/litellm:main-stable@${LITELLM_DIGEST}
     restart: unless-stopped
     expose:
       - "4000"
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      # LiteLLM Prisma-backed spend/key tracking — share memvault postgres
+      DATABASE_URL: postgresql://${POSTGRES_USER:-memvault}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-memvault}
+      STORE_MODEL_IN_DB: "false"
+      DISABLE_SPEND_LOGS: "true"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -78,6 +82,9 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     networks:
       - memvault-net
@@ -86,6 +93,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 5
+      start_period: 60s
 
   embed-gateway:
     image: ghcr.io/operonlab/memvault-embed-gateway:${VERSION:-latest}@${EMBED_DIGEST}
@@ -136,7 +144,7 @@ services:
       embed-gateway:
         condition: service_healthy
       litellm:
-        condition: service_healthy
+        condition: service_started   # LLM is optional at runtime; degrade gracefully
     networks:
       - memvault-net
     healthcheck:

@@ -38,10 +38,11 @@ COPY src/ ./src/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./alembic.ini
 
-ENV PORT=8080
+ENV PORT=8080 \
+    PYTHONPATH=/app:/app/src
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=5 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8080/health/liveliness || exit 1
 
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
