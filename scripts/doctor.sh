@@ -101,9 +101,17 @@ else
 fi
 
 section "LiteLLM connectivity"
+# Read MEMVAULT_LLM_DEFERRED flag from .env — install.sh sets this to 1 when
+# the user picked option 6 (offline mode) or set MEMVAULT_SKIP_LLM=1.
+LLM_DEFERRED="$(awk -F= '$1=="MEMVAULT_LLM_DEFERRED"{print $2; exit}' "${REPO_ROOT:-.}/.env" 2>/dev/null | tr -d '[:space:]')"
 if is_running litellm; then
     if dc exec -T litellm curl -fsS http://localhost:4000/health/liveliness >/dev/null 2>&1; then
         ok "litellm /health/liveliness OK"
+    elif [[ "${LLM_DEFERRED}" == "1" ]]; then
+        warn "litellm unhealthy — install ran in offline mode (MEMVAULT_LLM_DEFERRED=1)"
+        hint "Add at least one provider key (e.g. OPENAI_API_KEY=sk-...) in .env, then:"
+        hint "  docker compose restart litellm  &&  bash scripts/doctor.sh"
+        mark_warn
     else
         fail "litellm health check failed"
         hint "docker compose logs --tail 100 litellm — ensure at least one LLM key is set in .env"

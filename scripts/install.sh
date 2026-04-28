@@ -199,16 +199,26 @@ detect_embedding_backend() {
 # Step 6. LLM 強制配置
 # ---------------------------------------------------------------------------
 prompt_llm_provider() {
-  printf "\n%s\n" "請選擇 LLM provider："
-  printf "  1) OpenAI       (需 OPENAI_API_KEY)\n"
-  printf "  2) Anthropic    (需 ANTHROPIC_API_KEY)\n"
-  printf "  3) Google Gemini(需 GEMINI_API_KEY)\n"
-  printf "  4) DeepSeek     (需 DEEPSEEK_API_KEY)\n"
-  printf "  5) 本地 Ollama  (host.docker.internal:11434)\n"
-  printf "  6) 暫時跳過    (離線模式 — 先把 stack 跑起來，之後再補 key 並執行 doctor.sh)\n"
+  # WHY all UI to stderr (>&2): caller invokes us via `choice="$(...)"`
+  # which captures STDOUT. If menu printfs went to stdout, the whole menu
+  # text would end up inside ${choice}, and the case-match below would
+  # never see a clean "1"–"6". Only the chosen number goes to stdout.
+  printf "\n%s\n" "請選擇 LLM provider：" >&2
+  printf "  1) OpenAI       (需 OPENAI_API_KEY)\n" >&2
+  printf "  2) Anthropic    (需 ANTHROPIC_API_KEY)\n" >&2
+  printf "  3) Google Gemini(需 GEMINI_API_KEY)\n" >&2
+  printf "  4) DeepSeek     (需 DEEPSEEK_API_KEY)\n" >&2
+  printf "  5) 本地 Ollama  (host.docker.internal:11434)\n" >&2
+  printf "  6) 暫時跳過    (離線模式 — 先把 stack 跑起來，之後再補 key 並執行 doctor.sh)\n" >&2
   local choice
   while :; do
+    # `read -p` already writes the prompt to stderr — no extra redirection needed.
     read -r -p "選擇 [1-6]: " choice
+    # Strip CR/LF — PTY drivers and Windows-line-ending stdin can leave \r
+    # behind, and `read -r` does NOT strip \r (only \n). Without this,
+    # case-match against "1|2|3|4|5|6" silently fails for "6\r".
+    choice="${choice//$'\r'/}"
+    choice="${choice//$'\n'/}"
     case "${choice}" in
       1|2|3|4|5|6) printf '%s\n' "${choice}"; return 0 ;;
       *) warn "請輸入 1-6" ;;
@@ -222,6 +232,9 @@ read_api_key() {
   while [[ -z "${key// /}" ]]; do
     read -r -s -p "輸入 ${label}: " key
     printf "\n"
+    # Strip CR — PTY / Windows line endings can leave \r behind and pollute
+    # the API key. Same reason as prompt_llm_provider's choice handling.
+    key="${key//$'\r'/}"
     [[ -n "${key// /}" ]] || warn "key 不可為空"
   done
   printf '%s' "${key}"

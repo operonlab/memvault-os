@@ -115,6 +115,10 @@ prompt_new_port() {
   fi
   while :; do
     read -r -p "請輸入新的 ${label} port（1024-65535，留空中止）: " new_port
+    # Strip CR — PTY / Windows line endings leave \r and break the regex
+    # match below (`6\r` does not match ^[0-9]+$).
+    new_port="${new_port//$'\r'/}"
+    new_port="${new_port//$'\n'/}"
     if [[ -z "${new_port}" ]]; then
       err "${label} port 衝突未解決"
       HARD_FAIL=1

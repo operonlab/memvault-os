@@ -204,6 +204,91 @@ def test_pin_images_refs_match_compose_tags():
 
 
 # ---------------------------------------------------------------------------
+# Bug K — prompt_llm_provider menu must NOT pollute stdout
+# ---------------------------------------------------------------------------
+def test_prompt_llm_provider_menu_goes_to_stderr():
+    """`prompt_llm_provider` is called via `choice=$(prompt_llm_provider)`.
+
+    `$(...)` captures STDOUT. If the menu lines (`請選擇 LLM provider...`
+    `1) OpenAI...` etc.) went to stdout, the entire menu text would end up
+    inside ${choice}, and the subsequent `case ${choice} in 6) ...` would
+    never match a clean "6" — the install would loop forever asking for
+    LLM choice. The menu must therefore go to stderr; only the actual
+    chosen number goes to stdout (via `printf '%s\\n' "${choice}"`).
+
+    Found while running install.sh under expect (PTY) — option 6
+    (offline mode) silently fell through to the smoke-test path because
+    the captured choice was the entire menu text, not "6".
+    """
+    install_sh = (SCRIPTS / "install.sh").read_text()
+    fn = re.search(
+        r"prompt_llm_provider\(\)\s*\{(.+?)^\}", install_sh, re.M | re.S
+    )
+    assert fn, "install.sh: prompt_llm_provider() not found"
+    body = fn.group(1)
+    # Every printf line that draws the menu must redirect to stderr (>&2).
+    # The single answer-emit `printf '%s\n' "${choice}"` MUST stay on stdout.
+    failures: list[str] = []
+    for m in re.finditer(r'^[\s]*(printf\s+"[^"]*[^&]\\n"[^\n]*)$', body, re.M):
+        line = m.group(1).strip()
+        # Skip the answer-emit line.
+        if "${choice}" in line:
+            continue
+        if ">&2" not in line:
+            failures.append(line)
+    assert not failures, (
+        "prompt_llm_provider menu printfs must redirect to stderr (>&2)\n"
+        "to avoid polluting the $() capture in configure_llm. Offending:\n  - "
+        + "\n  - ".join(failures)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bug J — interactive `read -r` callers must strip CR from PTY / CRLF stdin
+# ---------------------------------------------------------------------------
+def test_interactive_reads_strip_cr():
+    """All `read -r -p` callers must strip \\r from the captured value.
+
+    Found while running install.sh under expect (PTY emulator): the LLM
+    provider menu's `read -r -p "選擇 [1-6]:"` captured "6\\r" (PTY drivers
+    do not strip the carriage return, and `read -r` only strips \\n).
+    The case-match against "1|2|3|4|5|6" then silently failed, the prompt
+    looped forever, and the install hung. Same issue surfaces with
+    Windows-style CRLF stdin redirection.
+
+    Convention: every interactive read whose value is matched against a
+    pattern (case / regex) must strip CR (and LF) before matching.
+    """
+    targets = [
+        SCRIPTS / "install.sh",      # configure_llm + read_api_key
+        SCRIPTS / "preflight.sh",    # prompt_new_port
+    ]
+    failures: list[str] = []
+    for path in targets:
+        text = path.read_text()
+        # For each `read -r [-s] -p "..." VAR` find the var, then in the
+        # following ~600 chars require a reference to `\r` mentioning that
+        # var. This is a heuristic — accepts $'\r' notation or any other
+        # CR-stripping idiom that names the variable.
+        for m in re.finditer(
+            r"read\s+-r\s+(?:-s\s+)?-p\s+\"[^\"]*\"\s+(\w+)",
+            text,
+        ):
+            var = m.group(1)
+            tail = text[m.end() : m.end() + 600]
+            # Heuristic: in tail, must contain both the var name and \r notation.
+            if r"\r" not in tail or var not in tail:
+                failures.append(
+                    f"{path.name}: `read -r -p ... {var}` is not followed "
+                    f"by any CR-strip on {var} within 600 chars"
+                )
+    assert not failures, (
+        "missing \\r strip after interactive read calls:\n  - "
+        + "\n  - ".join(failures)
+    )
+
+
+# ---------------------------------------------------------------------------
 # Bug H — alembic env.py must run CREATE SCHEMA inside begin_transaction()
 # ---------------------------------------------------------------------------
 def test_alembic_env_creates_schema_inside_transaction():
