@@ -103,7 +103,7 @@ def test_config_stub_loads(monkeypatch):
     assert s.port == 12345
     assert s.debug is True
     # Default values still resolvable.
-    assert s.embed_dim == 768
+    assert s.embed_dim == 1024  # default for Qwen3-Embedding-0.6B
 
     # Sanity: the singleton also exists and has a db_url.
     from src.config_stub import settings
