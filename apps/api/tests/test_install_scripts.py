@@ -148,6 +148,62 @@ def test_install_prepares_images_before_llm_smoke():
 
 
 # ---------------------------------------------------------------------------
+# Bug E — pin-images.sh image refs must match docker-compose.yml tags
+# ---------------------------------------------------------------------------
+def test_pin_images_refs_match_compose_tags():
+    """pin-images.sh image refs MUST match the tags in docker-compose.yml.
+
+    docker-compose.yml uses `image: <name>:<tag>@${X_DIGEST}`. pin-images.sh
+    resolves a digest by pulling `<name>:<tag>` and writes to .env.example.
+    If the tag in pin-images.sh diverges from the compose tag, the digest
+    written into .env applies to a DIFFERENT image variant — at best
+    correct-by-coincidence, at worst (e.g. tag doesn't exist on registry)
+    digest stays at placeholder 0000... and `docker compose pull` errors
+    with 'manifest unknown'.
+
+    Found: pin-images had `litellm:v1.55.10` but compose had
+    `litellm:main-stable`; v1.55.10 did not exist on ghcr.
+    """
+    pin_sh = (SCRIPTS / "pin-images.sh").read_text()
+    # Aggregate ALL compose files — vllm lives in gpu.yml, minio in frozen.yml.
+    compose_yml = "\n".join(
+        p.read_text() for p in sorted((REPO_ROOT / "infra").glob("docker-compose*.yml"))
+    )
+
+    # Extract pin-images IMAGES entries: "PREFIX|name:tag"
+    block = re.search(r"declare -a IMAGES=\((.+?)\)", pin_sh, re.S)
+    assert block, "pin-images.sh: IMAGES array block not found"
+    pin_refs: dict[str, str] = {}
+    for line in block.group(1).splitlines():
+        m = re.search(r'"([A-Z]+)\|([^"]+)"', line)
+        if m:
+            pin_refs[m.group(1)] = m.group(2)
+
+    assert pin_refs, "pin-images.sh: no IMAGES entries parsed"
+
+    # For each prefix, check the compose file references the SAME image:tag
+    # (digest is allowed to differ; that is what pin-images writes).
+    failures: list[str] = []
+    for prefix, ref in pin_refs.items():
+        # ref examples: "redis:7.4.1-alpine", "ghcr.io/berriai/litellm:main-stable"
+        # Look for `image: ${ref}@${PREFIX_DIGEST}` in compose (digest can be
+        # a literal hash or a variable; we only care the name:tag matches).
+        digest_var = f"${{{prefix}_DIGEST}}"
+        ref_re = re.escape(ref)
+        pattern = rf"image:\s*{ref_re}@(?:\$\{{{prefix}_DIGEST\}}|sha256:[0-9a-f]+)"
+        if not re.search(pattern, compose_yml):
+            # Also accept tag-only reference (no digest pinning yet).
+            tag_only = rf"image:\s*{ref_re}\s*$"
+            if not re.search(tag_only, compose_yml, re.M):
+                failures.append(
+                    f"{prefix}_DIGEST: pin-images uses {ref!r} but compose "
+                    f"has no matching `image: {ref}@{digest_var}` line"
+                )
+
+    assert not failures, "pin-images / compose tag drift:\n  - " + "\n  - ".join(failures)
+
+
+# ---------------------------------------------------------------------------
 # Bug D — configure_llm must support offline / skip mode
 # ---------------------------------------------------------------------------
 def test_configure_llm_supports_skip_or_offline():

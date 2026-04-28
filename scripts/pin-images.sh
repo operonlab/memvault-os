@@ -33,11 +33,15 @@ if [[ ! -f "${ENV_FILE}" ]]; then
 fi
 
 # (env_var_prefix, image_ref) — order matches .env.example block.
+# WHY litellm:main-stable (not v1.55.10): infra/docker-compose.yml references
+# `ghcr.io/berriai/litellm:main-stable@${LITELLM_DIGEST}`. v1.55.10 doesn't
+# exist on ghcr → resolve_digest fails → LITELLM_DIGEST stays as placeholder
+# 0000... → fresh `docker compose pull` errors with "manifest unknown".
 declare -a IMAGES=(
     "PG|pgvector/pgvector:0.8.0-pg16"
     "REDIS|redis:7.4.1-alpine"
     "QDRANT|qdrant/qdrant:v1.12.4"
-    "LITELLM|ghcr.io/berriai/litellm:v1.55.10"
+    "LITELLM|ghcr.io/berriai/litellm:main-stable"
     "VLLM|vllm/vllm-openai:v0.6.4.post1"
     "MINIO|minio/minio:RELEASE.2024-12-13T22-19-12Z"
 )
