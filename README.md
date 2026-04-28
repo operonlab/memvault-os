@@ -17,22 +17,21 @@
 
 > **Self-hosted long-term memory for LLM agents** — knowledge graph + semantic search + dream-loop reflection, packaged for one-command Docker install on macOS / Linux / Windows.
 
-## 🚧 Status: v0.1 — Active Development (Pre-Release)
+## ✅ Status: v1.0.0 — first public release
 
-Recently extracted from the [Workshop modular monolith](https://github.com/JonesHong/workshop). **No public release yet.**
+Extracted from the [Workshop modular monolith](https://github.com/JonesHong/workshop) and shipped as a standalone OSS scaffold.
 
 | Item | Status |
 |------|--------|
 | Docker stack boots | ✅ All 6 services healthy (postgres / redis / qdrant / litellm / embed-gateway / api) |
 | Alembic baseline migration | ✅ 17 tables in one migration |
-| Real E2E HTTP tests | ✅ 39 / 41 pass (95.1%) |
-| Pre-built images on ghcr.io | ❌ Not yet — users must `docker compose build` from source |
-| ONNX CPU embedding model artifact | ❌ Download script TBD; current fallback returns zero vectors |
-| `install.sh` placeholder-digest guard | ❌ One-command install will abort at `docker compose pull` |
-| Web frontend production build | ⚠️ TypeScript error (`actionJournal.ts:124` — fix pending) |
-| Linux / Windows verified | ❌ Currently tested only on macOS Apple Silicon |
-
-The "one-click install" path described below works once the v1.0.0 release ships images to ghcr.io. **For now, follow the [build-from-source](#run-from-source-current-only-supported-path) section.**
+| Real E2E HTTP tests | ✅ 40 / 42 pass (95.2%) |
+| Pre-built images on ghcr.io | ✅ Public — `ghcr.io/operonlab/memvault-{api,web,embed-gateway}:1.0.0` |
+| Codex adversarial review | ✅ All 6 findings (2 critical / 3 high / 1 medium) addressed before tag |
+| ONNX CPU model bootstrap | ✅ `scripts/download-models.sh` + fail-closed `/health` (no zero-vector pollution) |
+| `install.sh` placeholder-digest guard | ✅ Auto-detects unpinned digests + falls back to build mode |
+| Web frontend production build | ✅ `docker compose build web` green |
+| Linux / Windows verified | ⚠️ Pre-built images work everywhere; install scripts only smoke-tested on macOS Apple Silicon |
 
 ---
 
