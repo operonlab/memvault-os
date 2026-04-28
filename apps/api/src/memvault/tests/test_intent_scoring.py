@@ -10,6 +10,13 @@ Tests intent-aware configs in:
 Run with: ~/.local/bin/python3 <this_file>
 """
 
+import pytest
+
+pytest.skip(
+    "docvault out of OSS scope; monorepo path layout (parents[5]/core/src/...) needs rework",
+    allow_module_level=True,
+)
+
 import importlib.util
 import sys
 import types

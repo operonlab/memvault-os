@@ -3,7 +3,7 @@
 Pure-function tests over compute_frontier_score / rank_top_n —
 no DB, no SQLAlchemy stack required.
 
-Run with: ~/.local/bin/python3 core/src/modules/memvault/tests/test_frontier.py
+Run with: ~/.local/bin/python3 -m pytest src/memvault/tests/test_frontier.py
 """
 
 import math
@@ -11,15 +11,15 @@ import sys
 import unittest
 from pathlib import Path
 
-# Resolve repo root: core/src/modules/memvault/tests/<this>
+# Resolve memvault module dir: apps/api/src/memvault/tests/<this>
 _HERE = Path(__file__).resolve()
-_REPO = _HERE.parents[5]
-sys.path.insert(0, str(_REPO / "core" / "src"))
+_MEMVAULT_DIR = _HERE.parents[1]
+sys.path.insert(0, str(_MEMVAULT_DIR.parents[1]))  # apps/api/src on sys.path
 
 # Import the pure-function surface only — avoids loading SQLAlchemy models.
 import importlib.util  # noqa: E402
 
-_FRONTIER_PATH = _REPO / "core" / "src" / "modules" / "memvault" / "frontier.py"
+_FRONTIER_PATH = _MEMVAULT_DIR / "frontier.py"
 _MOD_NAME = "memvault_frontier_under_test"
 _spec = importlib.util.spec_from_file_location(_MOD_NAME, _FRONTIER_PATH)
 frontier = importlib.util.module_from_spec(_spec)

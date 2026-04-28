@@ -22,10 +22,11 @@ import types
 import unittest
 from pathlib import Path
 
-# ── Path setup (mirrors test_intent_scoring.py) ────────────────────────────
-BASE = str(Path(__file__).resolve().parents[5])
-sys.path.insert(0, f"{BASE}/core")
-sys.path.insert(0, f"{BASE}/libs/text-ops")
+# ── Path setup ────────────────────────────────────────────────────────────
+# tests/<this> → memvault/ → src/ → api/ → apps/ → memvault-os/
+_MEMVAULT_DIR = Path(__file__).resolve().parents[1]
+_API_SRC = _MEMVAULT_DIR.parents[0]  # apps/api/src
+sys.path.insert(0, str(_API_SRC))
 
 # ── Stub heavy dependencies — scoring_pipeline only uses these at call-time
 # (not import-time for structural checks), but the module-level imports still
@@ -75,17 +76,15 @@ sys.modules["text_ops.noise"] = _noise_sub
 sys.modules.pop("src.shared.reactive", None)
 
 # ── Load the scoring_pipeline module ───────────────────────────────────────
-def _load(rel_path: str, module_name: str):
-    spec = importlib.util.spec_from_file_location(
-        module_name, f"{BASE}/core/{rel_path}"
-    )
+def _load(abs_path: str, module_name: str):
+    spec = importlib.util.spec_from_file_location(module_name, abs_path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = mod
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     return mod
 
 _scoring = _load(
-    "src/modules/memvault/scoring_pipeline.py",
+    str(_MEMVAULT_DIR / "scoring_pipeline.py"),
     "memvault_scoring_pipeline_structure",
 )
 

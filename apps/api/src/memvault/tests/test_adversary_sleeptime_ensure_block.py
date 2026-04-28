@@ -18,10 +18,16 @@ Cleanup: every adversary_space row is hard-deleted via DELETE WHERE space_id LIK
 
 from __future__ import annotations
 
+import pytest
+
+pytest.skip(
+    "DB-integration test with hardcoded monorepo path /Users/joneshong/workshop/core/src — needs rework for OSS",
+    allow_module_level=True,
+)
+
 import sys
 import uuid
 
-import pytest
 from src.memvault.models import MemoryBlockSnapshot
 from src.memvault.sleeptime import (
     _ensure_block,
