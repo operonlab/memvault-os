@@ -18,6 +18,7 @@ interface MemvaultState {
   pageSize: number
   selectedBlock: MemoryBlock | null
   searchQuery: string
+  showAdvancedQuery: boolean
   kg_activeTab: BrowserTab
   kg_galaxyLayers: Set<GalaxyLayer>
 
@@ -27,6 +28,7 @@ interface MemvaultState {
   setViewMode: (mode: ViewMode) => void
   setSearchQuery: (query: string) => void
   clearSearch: () => void
+  toggleAdvancedQuery: () => void
   setKgActiveTab: (tab: BrowserTab) => void
   setKgGalaxyLayers: (layers: Set<GalaxyLayer>) => void
 }
@@ -40,6 +42,7 @@ export const useMemvaultStore = create<MemvaultState>()(
       pageSize: 20,
       selectedBlock: null,
       searchQuery: '',
+      showAdvancedQuery: false,
       kg_activeTab: 'fast',
       kg_galaxyLayers: new Set<GalaxyLayer>(['blocks', 'summaries', 'communities']),
 
@@ -54,6 +57,12 @@ export const useMemvaultStore = create<MemvaultState>()(
       setViewMode: (mode) => set({ viewMode: mode }, false, 'memvault/setViewMode'),
       setSearchQuery: (query) => set({ searchQuery: query }, false, 'memvault/setSearchQuery'),
       clearSearch: () => set({ searchQuery: '' }, false, 'memvault/clearSearch'),
+      toggleAdvancedQuery: () =>
+        set(
+          (state) => ({ showAdvancedQuery: !state.showAdvancedQuery }),
+          false,
+          'memvault/toggleAdvancedQuery',
+        ),
       setKgActiveTab: (tab) => set({ kg_activeTab: tab }, false, 'memvault/setKgActiveTab'),
       setKgGalaxyLayers: (layers) =>
         set({ kg_galaxyLayers: layers }, false, 'memvault/setKgGalaxyLayers'),

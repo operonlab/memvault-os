@@ -86,7 +86,9 @@ export function buildParams(
   const qs = new URLSearchParams()
   const merged = { page: 1, page_size: 20, ...defaults, ...obj }
   for (const [k, v] of Object.entries(merged)) {
-    if (v !== undefined && v !== null && v !== '') qs.set(k, String(v))
+    if (v === undefined || v === null) continue
+    const s = String(v)
+    if (s !== '') qs.set(k, s)
   }
   return qs.toString() ? `?${qs}` : ''
 }

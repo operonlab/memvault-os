@@ -125,18 +125,20 @@ class TripleService(BaseCRUDService[Triple, TripleCreate, TripleUpdate, TripleRe
             topic = batch.topic or item.topic
             timestamp = batch.timestamp or item.timestamp
 
-            triple = Triple(
-                space_id=space_id,
-                source_session=batch.session_id,
-                subject=subject,
-                predicate=predicate,
-                object=object_text,
-                topic=topic,
-                timestamp=timestamp,
-            )
-            # embedding column removed (Qdrant migration) — indexed via Qdrant after flush
-            db.add(triple)
+            # Per-row SAVEPOINT — IntegrityError on a duplicate must only roll
+            # back this row, not all previously-committed rows in the batch.
+            sp = await db.begin_nested()
             try:
+                triple = Triple(
+                    space_id=space_id,
+                    source_session=batch.session_id,
+                    subject=subject,
+                    predicate=predicate,
+                    object=object_text,
+                    topic=topic,
+                    timestamp=timestamp,
+                )
+                db.add(triple)
                 await db.flush()
                 # Entity resolution (best-effort)
                 await entity_resolution_service.resolve_and_link_triple(db, space_id, triple)
@@ -154,9 +156,10 @@ class TripleService(BaseCRUDService[Triple, TripleCreate, TripleUpdate, TripleRe
                     )
                 if contradictions:
                     await db.flush()
+                await sp.commit()
                 created.append(triple)
             except IntegrityError:
-                await db.rollback()
+                await sp.rollback()
                 logger.debug(
                     "Skipping duplicate triple: %s %s %s (session=%s)",
                     subject,

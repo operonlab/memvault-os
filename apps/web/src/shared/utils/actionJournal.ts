@@ -121,5 +121,5 @@ export function logMutation(type: string, variables?: unknown): void {
 
 // Expose to dev console
 if (typeof window !== 'undefined' && import.meta.env?.DEV) {
-  ;(window as Record<string, unknown>).__journal = journal
+  ;(window as unknown as Record<string, unknown>).__journal = journal
 }

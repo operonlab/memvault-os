@@ -68,7 +68,7 @@ export default function SessionCard({ session }: SessionCardProps) {
 
       {/* Block type badges */}
       <div className="flex flex-wrap gap-1.5 mt-3">
-        {session.block_types.map((bt) => {
+        {session.block_types.map((bt: string) => {
           const cfg = BLOCK_TYPE_CONFIG[bt as BlockType]
           const color = cfg?.color ?? 'var(--subtext0)'
           const label = cfg?.label ?? bt

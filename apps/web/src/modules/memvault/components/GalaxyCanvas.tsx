@@ -103,7 +103,9 @@ export default function GalaxyCanvas({
     if (!containerRef.current) return
     const colors = colorsRef.current
 
-    const graph = ForceGraph3D()(containerRef.current)
+    const graph = (ForceGraph3D as unknown as () => (el: HTMLElement) => any)()(
+      containerRef.current,
+    )
       .backgroundColor('#0F111E')
       // ── Nodes ──
       .nodeVal((n: any) => nodeSize(n))

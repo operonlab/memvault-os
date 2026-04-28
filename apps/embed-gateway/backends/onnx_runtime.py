@@ -4,14 +4,9 @@
     主路：自寫 Qwen3-Embedding-0.6B ONNX wrapper（1024d）
     備援：mxbai-embed-large-v1（中英效果需重測，整 corpus 重 reindex）
 
-scaffold 階段：先放 stub，回零向量但維持正確 shape，方便整條 plumbing
-打通。實際 ONNX session 載入由 Worker A / 後續 ticket 補。
-
-未來實作要點：
-    1. ONNX 模型放 /models/qwen3-embed-0.6b-onnx/，由 image 內或 volume 提供
-    2. 用 tokenizers.Tokenizer.from_file() 載 tokenizer
-    3. ort.InferenceSession 設 CPUExecutionProvider
-    4. mean pooling + L2 normalize → 對齊 MLX 輸出（cosine ≥ 0.99）
+Fail-closed：模型缺失時 backend 進入 unhealthy，/health 回 503，
+/embed 拒絕產生零向量（污染 Qdrant），呼叫者看到 503 後可跑
+`scripts/download-models.sh`。
 """
 from __future__ import annotations
 
@@ -24,23 +19,39 @@ import numpy as np
 LOG = logging.getLogger("embed-gateway.onnx")
 
 EMBED_DIM = int(os.getenv("EMBED_DIM", "1024"))
-MODEL_DIR = os.getenv("ONNX_MODEL_DIR", "/models/qwen3-embed-0.6b-onnx")
+MODEL_DIR = os.getenv("ONNX_MODEL_DIR", "/models/qwen3-embedding-0.6b")
 MAX_LENGTH = int(os.getenv("ONNX_MAX_LENGTH", "512"))
 
 _session: Any | None = None
 _tokenizer: Any | None = None
+_load_error: str | None = None
+
+
+class ModelNotLoadedError(RuntimeError):
+    """Raised when ONNX model artifacts are missing or failed to load."""
+
+
+def _model_paths() -> tuple[str, str]:
+    return (
+        os.path.join(MODEL_DIR, "model.onnx"),
+        os.path.join(MODEL_DIR, "tokenizer.json"),
+    )
 
 
 def _try_load() -> bool:
-    """Lazy-load ONNX session + tokenizer. Returns True if real model loaded."""
-    global _session, _tokenizer
+    """Lazy-load ONNX session + tokenizer. Returns True if loaded."""
+    global _session, _tokenizer, _load_error
     if _session is not None:
         return True
 
-    model_path = os.path.join(MODEL_DIR, "model.onnx")
-    tokenizer_path = os.path.join(MODEL_DIR, "tokenizer.json")
+    model_path, tokenizer_path = _model_paths()
     if not (os.path.isfile(model_path) and os.path.isfile(tokenizer_path)):
-        LOG.warning("ONNX model not found at %s — stub mode", MODEL_DIR)
+        _load_error = (
+            f"model artifacts missing under {MODEL_DIR} "
+            "(expected model.onnx + tokenizer.json) — "
+            "run scripts/download-models.sh"
+        )
+        LOG.warning("ONNX backend unhealthy: %s", _load_error)
         return False
 
     try:
@@ -51,11 +62,31 @@ def _try_load() -> bool:
         _tokenizer = Tokenizer.from_file(tokenizer_path)
         _tokenizer.enable_truncation(max_length=MAX_LENGTH)
         _tokenizer.enable_padding(length=MAX_LENGTH)
+        _load_error = None
         LOG.info("loaded ONNX model from %s", MODEL_DIR)
         return True
-    except Exception:  # pragma: no cover
-        LOG.exception("failed to load ONNX model — stub mode")
+    except Exception as exc:  # pragma: no cover
+        _load_error = f"failed to load ONNX session: {exc}"
+        LOG.exception("ONNX backend unhealthy: %s", _load_error)
         return False
+
+
+def is_healthy() -> bool:
+    """Probe at startup / health endpoint. Caches result via module globals."""
+    return _try_load()
+
+
+def health_detail() -> dict[str, Any]:
+    healthy = is_healthy()
+    detail: dict[str, Any] = {
+        "healthy": healthy,
+        "model_dir": MODEL_DIR,
+    }
+    if not healthy:
+        detail["reason"] = "model_not_loaded"
+        detail["error"] = _load_error or "unknown"
+        detail["hint"] = "run scripts/download-models.sh"
+    return detail
 
 
 def _mean_pool_normalize(last_hidden: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -71,8 +102,9 @@ async def embed(
     texts: list[str], task_type: str | None, *, normalize: bool = True
 ) -> list[list[float]]:
     if not _try_load():
-        # stub fallback：保持 plumbing 可動
-        return [[0.0] * EMBED_DIM for _ in texts]
+        raise ModelNotLoadedError(
+            _load_error or "ONNX model not loaded; run scripts/download-models.sh"
+        )
 
     assert _session is not None and _tokenizer is not None
     encs = _tokenizer.encode_batch(texts)

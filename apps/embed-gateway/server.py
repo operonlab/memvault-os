@@ -16,10 +16,11 @@ from __future__ import annotations
 import os
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-
 from backends import mlx_proxy, onnx_runtime, vllm_proxy
+from backends.onnx_runtime import ModelNotLoadedError
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 BACKEND = os.getenv("EMBED_BACKEND", "onnx").lower()
 EMBED_DIM = int(os.getenv("EMBED_DIM", "1024"))
@@ -41,14 +42,26 @@ class EmbedResponse(BaseModel):
     backend: str
 
 
+_ONNX_BACKEND_NAMES = {"onnx", "onnx_runtime", "cpu"}
+
+
 @app.get("/health")
-async def health() -> dict:
-    return {
+async def health() -> JSONResponse:
+    body: dict = {
         "status": "ok",
         "backend": BACKEND,
         "model": EMBED_MODEL,
         "dim": EMBED_DIM,
     }
+    if BACKEND in _ONNX_BACKEND_NAMES:
+        detail = onnx_runtime.health_detail()
+        body["onnx"] = detail
+        if not detail["healthy"]:
+            body["status"] = "error"
+            body["reason"] = detail.get("reason", "model_not_loaded")
+            body["hint"] = detail.get("hint", "run scripts/download-models.sh")
+            return JSONResponse(status_code=503, content=body)
+    return JSONResponse(status_code=200, content=body)
 
 
 @app.post("/embed", response_model=EmbedResponse)
@@ -58,12 +71,23 @@ async def embed(req: EmbedRequest) -> EmbedResponse:
             vectors = await mlx_proxy.forward(req.texts, req.task_type)
         elif BACKEND == "vllm_proxy":
             vectors = await vllm_proxy.forward(req.texts, req.task_type)
-        elif BACKEND in ("onnx", "onnx_runtime", "cpu"):
+        elif BACKEND in _ONNX_BACKEND_NAMES:
             vectors = await onnx_runtime.embed(req.texts, req.task_type, normalize=req.normalize)
         else:
             raise HTTPException(status_code=500, detail=f"unknown backend: {BACKEND}")
     except HTTPException:
         raise
+    except ModelNotLoadedError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "error",
+                "reason": "model_not_loaded",
+                "backend": BACKEND,
+                "error": str(exc),
+                "hint": "run scripts/download-models.sh",
+            },
+        ) from exc
     except Exception as exc:  # pragma: no cover — surface upstream errors
         raise HTTPException(status_code=502, detail=f"backend {BACKEND} failed: {exc}") from exc
 

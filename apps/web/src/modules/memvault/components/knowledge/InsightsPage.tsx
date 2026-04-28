@@ -71,7 +71,7 @@ export default function InsightsPage() {
         <EmptyState empty emptyTitle="無符合條件的洞察" emptySubtitle="嘗試調整篩選條件" />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          {summaries.map((s) => (
+          {summaries.map((s: CommunitySummary) => (
             <SummaryCard
               key={s.id}
               summary={s}

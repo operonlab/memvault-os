@@ -3,6 +3,7 @@ import AttitudeTimeline from './AttitudeTimeline'
 import InfoTip from './InfoTip'
 import SessionCard from './SessionCard'
 import { useSessions } from '../hooks/queries'
+import type { SessionSummary } from '../types'
 
 export default function JourneyView() {
   const [page, setPage] = useState(1)
@@ -65,7 +66,7 @@ export default function JourneyView() {
 
         {/* Session cards in timeline */}
         <div className="space-y-3">
-          {sessions.map((session, idx) => {
+          {sessions.map((session: SessionSummary, idx: number) => {
             // Show date separator when day changes
             const prevSession = sessions[idx - 1]
             const currDate = new Date(session.last_at).toLocaleDateString('zh-TW', {

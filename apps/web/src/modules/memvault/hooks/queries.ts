@@ -8,13 +8,18 @@ export const memvaultKeys = {
   blocks: (page: number, pageSize: number, filters: BlockFilters) =>
     ['memvault', 'blocks', { page, pageSize, blockType: filters.blockType, tag: filters.tag }] as const,
   profile: () => ['memvault', 'profile'] as const,
+  sessions: (page: number) => ['memvault', 'sessions', page] as const,
   search: (query: string, options: Partial<MemoryQueryOptions>) =>
     ['memvault', 'search', query, options] as const,
   kg: {
     triples: (page: number) => ['memvault', 'kg', 'triples', page] as const,
+    triplesFiltered: (page: number, predicate?: string, subject?: string) =>
+      ['memvault', 'kg', 'triples-filtered', page, predicate ?? null, subject ?? null] as const,
     communities: () => ['memvault', 'kg', 'communities'] as const,
     communityDetail: (id: string) => ['memvault', 'kg', 'community', id] as const,
     summaries: () => ['memvault', 'kg', 'summaries'] as const,
+    summariesFiltered: (resolutionLevel?: number, tag?: string) =>
+      ['memvault', 'kg', 'summaries-filtered', resolutionLevel ?? null, tag ?? null] as const,
     attitudes: () => ['memvault', 'kg', 'attitudes'] as const,
     attitudeHistory: (id: string) => ['memvault', 'kg', 'attitude-history', id] as const,
     skills: () => ['memvault', 'kg', 'skills'] as const,
@@ -108,6 +113,30 @@ export function useSkills() {
   return useQuery({
     queryKey: memvaultKeys.kg.skills(),
     queryFn: () => kgApi.skillProfiles(),
+    staleTime: STALE_TIME,
+  })
+}
+
+export function useSessions(page: number) {
+  return useQuery({
+    queryKey: memvaultKeys.sessions(page),
+    queryFn: () => memvaultApi.listSessions(page, 20),
+    staleTime: STALE_TIME,
+  })
+}
+
+export function useTriplesFiltered(page: number, predicate?: string, subject?: string) {
+  return useQuery({
+    queryKey: memvaultKeys.kg.triplesFiltered(page, predicate, subject),
+    queryFn: () => kgApi.listTriples(page, 20, predicate, subject),
+    staleTime: STALE_TIME,
+  })
+}
+
+export function useSummariesFiltered(resolutionLevel?: number, tag?: string) {
+  return useQuery({
+    queryKey: memvaultKeys.kg.summariesFiltered(resolutionLevel, tag),
+    queryFn: () => kgApi.listSummaries(resolutionLevel, tag),
     staleTime: STALE_TIME,
   })
 }

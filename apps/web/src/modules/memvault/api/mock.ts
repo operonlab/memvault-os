@@ -6,7 +6,12 @@ import type {
   PaginatedResponse,
   SemanticSearchResult,
 } from '@/types'
-import type { MemoryCardRecord, MemoryQueryOptions, MemoryQueryResponse } from '../types'
+import type {
+  MemoryCardRecord,
+  MemoryQueryOptions,
+  MemoryQueryResponse,
+  SessionSummary,
+} from '../types'
 
 const delay = (ms = 50) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -354,5 +359,37 @@ export const mockMemvaultApi = {
   syncStats: async () => {
     await delay()
     return { total: 12, synced: 12, failed: 0, skipped: 0 }
+  },
+
+  recalculateProfile: async (): Promise<KASProfile> => {
+    await delay()
+    return mockProfile
+  },
+
+  listSessions: async (
+    page = 1,
+    pageSize = 20,
+  ): Promise<PaginatedResponse<SessionSummary>> => {
+    await delay()
+    const grouped = new Map<string, MemoryBlock[]>()
+    for (const b of mockBlocks) {
+      if (!b.source_session) continue
+      const arr = grouped.get(b.source_session) ?? []
+      arr.push(b)
+      grouped.set(b.source_session, arr)
+    }
+    const items: SessionSummary[] = Array.from(grouped.entries()).map(([sid, blocks]) => {
+      const sorted = [...blocks].sort((a, b) => a.created_at.localeCompare(b.created_at))
+      const types = Array.from(new Set(sorted.map((b) => b.block_type)))
+      return {
+        source_session: sid,
+        block_count: blocks.length,
+        first_at: sorted[0].created_at,
+        last_at: sorted[sorted.length - 1].created_at,
+        block_types: types,
+      }
+    })
+    items.sort((a, b) => b.last_at.localeCompare(a.last_at))
+    return paginate(items, page, pageSize)
   },
 }

@@ -308,11 +308,89 @@ configure_llm() {
 }
 
 # ---------------------------------------------------------------------------
+# Step 6.5. ONNX model 下載（僅 onnx backend 需要，fail-closed）
+# ---------------------------------------------------------------------------
+ensure_onnx_model() {
+  local backend
+  backend="$(get_env EMBED_BACKEND || echo "")"
+  case "${backend}" in
+    onnx|onnx_runtime|cpu) ;;
+    *) return 0 ;;
+  esac
+
+  local target="${ROOT_DIR}/models/qwen3-embedding-0.6b"
+  if [[ -s "${target}/model.onnx" && -s "${target}/tokenizer.json" ]]; then
+    info "ONNX model 已存在於 models/qwen3-embedding-0.6b"
+    return 0
+  fi
+
+  title "6.5. 下載 ONNX embedding model（~600MB，CPU fallback 必需）"
+  local script="${ROOT_DIR}/scripts/download-models.sh"
+  [[ -x "${script}" ]] || chmod +x "${script}" 2>/dev/null || true
+  if ! bash "${script}" "${target}"; then
+    die "ONNX 模型下載失敗 — embed-gateway 將拒絕產生向量。請手動跑 ${script} 後重試"
+  fi
+  log "ONNX model 就緒：${target}"
+}
+
+# ---------------------------------------------------------------------------
 # Step 7. compose pull + up
 # ---------------------------------------------------------------------------
+
+# Detect placeholder _DIGEST=sha256:000... values in .env. Returns 0 if
+# placeholders were found and build-mode fallback was applied; 1 if all
+# digests are real. Why: if main shipped before ghcr image digests were pinned,
+# `docker compose pull` fails with "manifest unknown" — degrade to building
+# api/web/embed-gateway from source via docker-compose.dev.yml.
+detect_placeholder_digest() {
+  local env_file="${ROOT_DIR}/.env"
+  if [[ ! -f "${env_file}" ]] || ! grep -qE "_DIGEST=sha256:0{64}" "${env_file}"; then
+    return 1
+  fi
+
+  warn "偵測到未 pin 的 placeholder digest（_DIGEST=sha256:000...）"
+  info "降級到 build mode：自家 image (api/web/embed-gateway) 從 source build；第三方 image 重 pin"
+
+  local current
+  current="$(get_env COMPOSE_FILE || true)"
+  [[ -z "${current}" ]] && current="infra/docker-compose.yml"
+  if [[ "${current}" != *"docker-compose.dev.yml"* ]]; then
+    set_env COMPOSE_FILE "${current}:infra/docker-compose.dev.yml"
+    log "COMPOSE_FILE 已加上 dev override → $(get_env COMPOSE_FILE)"
+  fi
+
+  if [[ -f "${ROOT_DIR}/scripts/pin-images.sh" ]]; then
+    info "執行 pin-images.sh 補真實第三方 digest（更新 .env.example）..."
+    if bash "${ROOT_DIR}/scripts/pin-images.sh"; then
+      local var newval
+      for var in PG_DIGEST REDIS_DIGEST QDRANT_DIGEST LITELLM_DIGEST VLLM_DIGEST MINIO_DIGEST; do
+        newval="$(awk -F= -v k="${var}" '$1==k {sub(/^[^=]*=/,""); split($0,a," "); print a[1]; exit}' "${ROOT_DIR}/.env.example")"
+        if [[ -n "${newval}" && "${newval}" != "sha256:0000000000000000000000000000000000000000000000000000000000000000" ]]; then
+          set_env "${var}" "${newval}"
+        fi
+      done
+      log "已同步第三方 digest 到 .env"
+    else
+      warn "pin-images.sh 失敗 — 自家 image build 仍會繼續，但第三方 pull 可能失敗"
+    fi
+  else
+    warn "找不到 scripts/pin-images.sh，第三方 digest 未自動 pin"
+  fi
+
+  info "build 自家三個 image (api, web, embed-gateway)..."
+  ( cd "${ROOT_DIR}" && docker compose --env-file .env build api web embed-gateway )
+  log "自家 image build 完成"
+
+  return 0
+}
+
 compose_up() {
   title "7. 拉 image + 啟動"
-  ( cd "${ROOT_DIR}" && docker compose pull )
+  if detect_placeholder_digest; then
+    info "Build mode 已備齊 image — 略過 docker compose pull"
+  else
+    ( cd "${ROOT_DIR}" && docker compose pull )
+  fi
   ( cd "${ROOT_DIR}" && docker compose up -d )
   log "docker compose up -d 完成"
 }
@@ -404,6 +482,7 @@ main() {
   generate_secrets
   detect_embedding_backend
   configure_llm
+  ensure_onnx_model
   compose_up
   wait_for_healthy
   run_migrations

@@ -201,6 +201,14 @@ export interface SkillProfile {
   last_synced_at: string | null
 }
 
+export interface SessionSummary {
+  source_session: string
+  block_count: number
+  first_at: string
+  last_at: string
+  block_types: string[]
+}
+
 export interface CascadeRecallResult {
   summaries: CommunitySummary[]
   communities: Community[]

@@ -30,3 +30,5 @@ services:
     build:
       context: ../apps/embed-gateway
       dockerfile: Dockerfile
+    volumes:
+      - ../models:/models:ro

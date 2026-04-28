@@ -495,6 +495,59 @@ async def test_kg_triple_batch_insert(httpx_client: httpx.AsyncClient):
     )
 
 
+async def test_batch_ingest_partial_dup_only_rolls_back_dup_row(
+    httpx_client: httpx.AsyncClient,
+):
+    """Regression for codex review #5 (batch_ingest IntegrityError over-rollback).
+
+    Mix unique + duplicate triples in one batch. Result must report only the
+    valid count, and the valid rows MUST be persisted (not rolled back together
+    with the offending row). Pre-fix code called `db.rollback()` on any
+    IntegrityError, which discarded all already-flushed rows in the same
+    transaction; the fix wraps each row in a SAVEPOINT.
+    """
+    session_id = f"e2e_dup_session_{uuid.uuid4().hex[:8]}"
+    marker = uuid.uuid4().hex[:8]
+    unique_triples = [
+        {
+            "subject": f"e2e_dup_subj_{marker}_{i}",
+            "predicate": "rel",
+            "object": f"obj_{i}",
+            "session_id": session_id,
+        }
+        for i in range(3)
+    ]
+    # Two duplicates of the first unique triple — collide on
+    # uq_triples_space_session_spo (space_id, source_session, s, p, o).
+    duplicate = dict(unique_triples[0])
+    triples = unique_triples + [duplicate, duplicate]
+
+    body = {"session_id": session_id, "triples": triples}
+    r = await httpx_client.post("/api/memvault/kg/triples/batch", json=body)
+    assert r.status_code in (200, 201), (
+        f"batch ingest not 2xx: {r.status_code} {r.text[:300]}"
+    )
+    payload = r.json()
+    assert isinstance(payload, dict), f"expected dict, got {payload!r}"
+    assert payload.get("ingested") == 3, (
+        f"expected 3 unique rows ingested, got {payload!r}"
+    )
+
+    # Verify the unique rows actually persisted — pre-fix bug rolled them back.
+    for t in unique_triples:
+        rs = await httpx_client.get(
+            "/api/memvault/kg/triples",
+            params={"predicate": t["predicate"], "subject": t["subject"]},
+        )
+        assert rs.status_code == 200, f"list not 200: {rs.status_code} {rs.text[:200]}"
+        payload = rs.json()
+        items = payload.get("items") if isinstance(payload, dict) else payload
+        assert isinstance(items, list)
+        assert any(it.get("subject") == t["subject"] for it in items), (
+            f"unique triple was rolled back by duplicate sibling: subject={t['subject']!r}"
+        )
+
+
 async def test_kg_triple_search_by_predicate(httpx_client: httpx.AsyncClient):
     """Seed a triple, then search by its predicate. Result must contain it."""
     pred = f"e2e_pred_{uuid.uuid4().hex[:8]}"
