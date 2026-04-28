@@ -180,7 +180,7 @@ services:
       embed-gateway:
         condition: service_healthy
       litellm:
-        condition: service_healthy
+        condition: service_started   # LLM is optional at runtime; degrade gracefully (matches api)
     networks:
       - memvault-net
 

@@ -204,6 +204,51 @@ def test_pin_images_refs_match_compose_tags():
 
 
 # ---------------------------------------------------------------------------
+# Bug F — services must NOT block on litellm:service_healthy
+# ---------------------------------------------------------------------------
+def test_no_service_requires_litellm_healthy():
+    """No service may declare `litellm: condition: service_healthy`.
+
+    litellm requires a working LLM provider key + working prisma DATABASE_URL
+    to pass health. Either of those failing (no API key on a fresh install,
+    or a litellm prisma regression) leaves litellm in `health: starting`
+    forever. Any dependent waiting on `service_healthy` then prevents
+    `docker compose up -d` from succeeding, which causes install.sh to
+    abort before alembic migrations run.
+
+    Convention: dependents must use `condition: service_started` so the LLM
+    layer can degrade gracefully (existing comment on api: "LLM is optional
+    at runtime; degrade gracefully"). Found on `worker` service which still
+    used service_healthy.
+    """
+    import yaml
+
+    failures: list[str] = []
+    for compose_path in sorted((REPO_ROOT / "infra").glob("docker-compose*.yml")):
+        try:
+            data = yaml.safe_load(compose_path.read_text())
+        except Exception as exc:
+            pytest.fail(f"could not parse {compose_path}: {exc}")
+        for svc_name, svc in (data.get("services") or {}).items():
+            if not isinstance(svc, dict):
+                continue
+            deps = svc.get("depends_on") or {}
+            if not isinstance(deps, dict):
+                continue
+            litellm_dep = deps.get("litellm")
+            if isinstance(litellm_dep, dict):
+                if litellm_dep.get("condition") == "service_healthy":
+                    failures.append(
+                        f"{compose_path.name}::{svc_name} depends_on litellm "
+                        f"with condition=service_healthy — must be service_started"
+                    )
+
+    assert not failures, "litellm health-gating violations:\n  - " + "\n  - ".join(
+        failures
+    )
+
+
+# ---------------------------------------------------------------------------
 # Bug D — configure_llm must support offline / skip mode
 # ---------------------------------------------------------------------------
 def test_configure_llm_supports_skip_or_offline():
