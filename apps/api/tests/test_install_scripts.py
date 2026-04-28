@@ -204,6 +204,43 @@ def test_pin_images_refs_match_compose_tags():
 
 
 # ---------------------------------------------------------------------------
+# Bug G — wait_for_healthy must not require litellm
+# ---------------------------------------------------------------------------
+def test_wait_for_healthy_treats_litellm_as_optional():
+    """install.sh wait_for_healthy must not treat litellm as required.
+
+    litellm in main-stable currently fails its prisma DATABASE_URL
+    validation at startup and stays at `health: starting` indefinitely.
+    If wait_for_healthy requires litellm to be healthy, the 90s loop
+    times out, install.sh aborts before run_migrations runs, and the
+    user is left with an empty memvault schema (0 tables).
+
+    The required list must therefore NOT include litellm. Optional / best
+    effort reporting is fine.
+    """
+    install_sh = (SCRIPTS / "install.sh").read_text()
+    fn = re.search(
+        r"wait_for_healthy\(\)\s*\{(.+?)^\}", install_sh, re.M | re.S
+    )
+    assert fn, "install.sh: wait_for_healthy() not found"
+    body = fn.group(1)
+
+    required_match = re.search(
+        r"local\s+required=\(([^)]+)\)", body
+    )
+    assert required_match, (
+        "wait_for_healthy must declare a `local required=(...)` array "
+        "of services that gate install completion"
+    )
+    required = required_match.group(1)
+    assert '"litellm"' not in required, (
+        "wait_for_healthy required services must NOT include litellm — "
+        "litellm prisma is unhealthy on fresh installs and would block "
+        "alembic upgrade. List litellm under optional instead."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Bug F — services must NOT block on litellm:service_healthy
 # ---------------------------------------------------------------------------
 def test_no_service_requires_litellm_healthy():

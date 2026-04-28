@@ -454,11 +454,16 @@ compose_up() {
 wait_for_healthy() {
   title "8. 健康檢查（最多 90s）"
   local deadline=$(( $(date +%s) + 90 ))
-  local services=("postgres" "redis" "qdrant" "litellm" "embed-gateway" "api")
+  # 必要服務：API + 其依賴。litellm 排除是因為 prisma 在 main-stable 有
+  # DATABASE_URL 解析回歸，常停留 health: starting；對應 docker-compose.yml
+  # 已將 api/worker depends_on litellm 改成 service_started，所以 litellm
+  # 不健康也不應阻擋 install 進入 alembic 步驟。
+  local required=("postgres" "redis" "qdrant" "embed-gateway" "api")
+  local optional=("litellm")
   local all_ok=0
   while (( $(date +%s) < deadline )); do
     all_ok=1
-    for svc in "${services[@]}"; do
+    for svc in "${required[@]}"; do
       local cid
       cid="$(cd "${ROOT_DIR}" && docker compose ps -q "${svc}" 2>/dev/null || true)"
       if [[ -z "${cid}" ]]; then
@@ -472,12 +477,25 @@ wait_for_healthy() {
       fi
     done
     if (( all_ok == 1 )); then
-      log "全部 service 健康"
+      log "全部必要 service 健康"
+      # optional services — best effort report only.
+      for svc in "${optional[@]}"; do
+        local ocid
+        ocid="$(cd "${ROOT_DIR}" && docker compose ps -q "${svc}" 2>/dev/null || true)"
+        [[ -z "${ocid}" ]] && continue
+        local ostate
+        ostate="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${ocid}" 2>/dev/null || echo unknown)"
+        if [[ "${ostate}" == "healthy" ]]; then
+          log "${svc} healthy"
+        else
+          warn "${svc} 狀態 ${ostate}（非必要，不阻擋安裝）— 等填入 LLM key 後 doctor.sh 會復檢"
+        fi
+      done
       return 0
     fi
     sleep 3
   done
-  err "90s 內未全部健康，請檢查：docker compose ps / docker compose logs"
+  err "90s 內必要 service 未全部健康，請檢查：docker compose ps / docker compose logs"
   ( cd "${ROOT_DIR}" && docker compose ps )
   return 1
 }
