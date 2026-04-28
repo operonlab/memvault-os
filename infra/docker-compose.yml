@@ -118,8 +118,10 @@ services:
   api:
     image: ghcr.io/operonlab/memvault-api:${VERSION:-latest}@${API_DIGEST}
     build:
-      context: ../apps/api
-      dockerfile: Dockerfile
+      # context is the repo root so the same Dockerfile can COPY apps/worker
+      # into the image (worker service shares this image with a different CMD).
+      context: ..
+      dockerfile: apps/api/Dockerfile
     restart: unless-stopped
     ports:
       - "127.0.0.1:${API_PORT:-8080}:8080"
@@ -156,8 +158,9 @@ services:
   worker:
     image: ghcr.io/operonlab/memvault-api:${VERSION:-latest}@${API_DIGEST}
     build:
-      context: ../apps/api
-      dockerfile: Dockerfile
+      # Same image as api — see api.build for why context is the repo root.
+      context: ..
+      dockerfile: apps/api/Dockerfile
     restart: unless-stopped
     command: ["python", "-m", "apps.worker.main"]
     environment:

@@ -77,7 +77,10 @@ jobs:
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: ./apps/${{ matrix.app }}
+          # api image bundles apps/worker too (compose worker reuses this
+          # image with a different CMD), so api needs the repo root as
+          # context. web / embed-gateway stay with their app directory.
+          context: ${{ matrix.app == 'api' && '.' || format('./apps/{0}', matrix.app) }}
           file: ./apps/${{ matrix.app }}/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true

@@ -289,6 +289,47 @@ def test_interactive_reads_strip_cr():
 
 
 # ---------------------------------------------------------------------------
+# Bug L — api image must include apps/worker source for the worker container
+# ---------------------------------------------------------------------------
+def test_api_image_bundles_worker_module():
+    """The worker compose service reuses the api image with a different CMD
+    (`python -m apps.worker.main`). For that to resolve, apps/worker/ must
+    be COPY'd into the image at /app/apps/worker/.
+
+    Found while running install.sh fresh: worker container restart-loops
+    with `ModuleNotFoundError: No module named 'apps.worker.main'`.
+    The api Dockerfile was using `context: ../apps/api` so it could only
+    see apps/api source — apps/worker was invisible to the build.
+
+    Static check: api Dockerfile must COPY apps/worker, AND both api and
+    worker compose services must use a build context that lets the
+    Dockerfile see apps/worker (i.e. repo root, not apps/api).
+    """
+    dockerfile = (REPO_ROOT / "apps" / "api" / "Dockerfile").read_text()
+    assert re.search(
+        r"^\s*COPY\s+apps/worker/?\s+", dockerfile, re.M
+    ), "apps/api/Dockerfile must `COPY apps/worker/ ...` so the worker container's `python -m apps.worker.main` can resolve."
+
+    compose = (REPO_ROOT / "infra" / "docker-compose.yml").read_text()
+    for svc in ("api", "worker"):
+        # Look for `${svc}:\n ... build:\n ... context: ...` and assert
+        # context is NOT `../apps/api` (which would hide apps/worker).
+        block = re.search(
+            rf"^\s{{2}}{svc}:\n(.+?)(?=^\s{{0,2}}\w[^:]*:|\Z)",
+            compose,
+            re.M | re.S,
+        )
+        assert block, f"compose service '{svc}' not found"
+        ctx = re.search(r"build:\s*\n\s+(?:#[^\n]*\n\s+)*context:\s*(\S+)", block.group(1))
+        assert ctx, f"service '{svc}' has no build.context"
+        assert ctx.group(1) != "../apps/api", (
+            f"compose service '{svc}' uses context=../apps/api which hides "
+            f"apps/worker from the Dockerfile build — worker container "
+            f"will fail with ModuleNotFoundError. Use context=.."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Bug H — alembic env.py must run CREATE SCHEMA inside begin_transaction()
 # ---------------------------------------------------------------------------
 def test_alembic_env_creates_schema_inside_transaction():
