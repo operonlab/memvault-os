@@ -1,0 +1,159 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: unit-tests
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_USER: memvault
+      POSTGRES_PASSWORD: memvault_ci
+      POSTGRES_DB: memvault_test
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      REDIS_PASSWORD: redis_ci
+      REDIS_HOST: localhost
+      REDIS_PORT: "6379"
+      QDRANT_HOST: localhost
+      QDRANT_PORT: "6333"
+      MEMVAULT_SECRET_KEY: ci_secret_do_not_use_in_prod
+      MEMVAULT_ENV: ci
+      DATABASE_URL: postgresql+asyncpg://memvault:memvault_ci@localhost:5432/memvault_test
+      ALEMBIC_DATABASE_URL: postgresql+psycopg://memvault:memvault_ci@localhost:5432/memvault_test
+      REDIS_URL: redis://:redis_ci@localhost:6379/0
+      QDRANT_URL: http://localhost:6333
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.0-pg16
+        env:
+          POSTGRES_USER: memvault
+          POSTGRES_PASSWORD: memvault_ci
+          POSTGRES_DB: memvault_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memvault -d memvault_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7.4.1-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      qdrant:
+        image: qdrant/qdrant:v1.12.4
+        ports:
+          - 6333:6333
+          - 6334:6334
+        options: >-
+          --health-cmd "bash -c 'exec 3<>/dev/tcp/localhost/6333 && echo ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Load .env.ci (if present)
+        run: |
+          if [ -f .env.ci ]; then
+            set -a; . ./.env.ci; set +a
+            # Re-export to GITHUB_ENV so subsequent steps see them
+            grep -v '^\s*#' .env.ci | grep -v '^\s*$' >> "$GITHUB_ENV" || true
+          else
+            echo "::notice::.env.ci not present, using job env defaults"
+          fi
+
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: |
+          uv pip install --system -e ".[dev]"
+
+      - name: Run Alembic migrations
+        working-directory: apps/api
+        run: |
+          if [ -f alembic.ini ]; then
+            alembic upgrade head
+          else
+            echo "::warning::alembic.ini not found, skipping migrations"
+          fi
+
+      - name: Run pytest
+        working-directory: apps/api
+        run: pytest tests/ -v --tb=short
+
+  frontend-tests:
+    name: frontend-tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable pnpm via corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@latest --activate
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('apps/web/pnpm-lock.yaml', 'apps/web/package.json') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Verify build artifact
+        run: |
+          if [ ! -d dist ]; then
+            echo "::error::dist/ not produced by pnpm build"
+            exit 1
+          fi
+          if [ ! -f dist/index.html ]; then
+            echo "::error::dist/index.html missing"
+            exit 1
+          fi
+          echo "✅ build artifact verified"
+          ls -la dist/ | head -20
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist
+          retention-days: 7

@@ -1,0 +1,118 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  lint:
+    name: lint
+    uses: ./.github/workflows/lint.yml
+
+  test:
+    name: test
+    uses: ./.github/workflows/test.yml
+
+  build-images:
+    name: build-images
+    needs: [lint, test]
+    uses: ./.github/workflows/build-images.yml
+    secrets: inherit
+
+  release:
+    name: gh-release
+    needs: [lint, test, build-images]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "version_no_v=${VERSION#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Find previous tag
+        id: prev
+        run: |
+          PREV=$(git describe --tags --abbrev=0 "${{ steps.version.outputs.version }}^" 2>/dev/null || echo "")
+          echo "previous=${PREV}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes from commits
+        id: notes
+        run: |
+          PREV="${{ steps.prev.outputs.previous }}"
+          CUR="${{ steps.version.outputs.version }}"
+          if [ -n "$PREV" ]; then
+            RANGE="${PREV}..${CUR}"
+          else
+            RANGE="${CUR}"
+          fi
+          {
+            echo "## What's Changed"
+            echo
+            git log --pretty=format:'- %s (%h)' "$RANGE"
+            echo
+            echo
+            echo "## Container Images"
+            echo
+            echo "- \`ghcr.io/operonlab/memvault-api:${{ steps.version.outputs.version_no_v }}\`"
+            echo "- \`ghcr.io/operonlab/memvault-web:${{ steps.version.outputs.version_no_v }}\`"
+            echo "- \`ghcr.io/operonlab/memvault-embed-gateway:${{ steps.version.outputs.version_no_v }}\`"
+            echo "- \`ghcr.io/operonlab/memvault-worker:${{ steps.version.outputs.version_no_v }}\`"
+            echo
+            echo "## Quick Install"
+            echo
+            echo "macOS / Linux:"
+            echo
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/operonlab/memvault-os/${CUR}/scripts/install.sh | bash"
+            echo '```'
+            echo
+            echo "Windows (PowerShell):"
+            echo
+            echo '```powershell'
+            echo "irm https://raw.githubusercontent.com/operonlab/memvault-os/${CUR}/scripts/install.ps1 | iex"
+            echo '```'
+          } > /tmp/release-notes.md
+          echo "notes_path=/tmp/release-notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Stage release assets
+        run: |
+          mkdir -p /tmp/release-assets
+          if [ -f scripts/install.sh ]; then
+            cp scripts/install.sh /tmp/release-assets/install.sh
+          fi
+          if [ -f scripts/install.ps1 ]; then
+            cp scripts/install.ps1 /tmp/release-assets/install.ps1
+          fi
+          if [ -f infra/docker-compose.yml ]; then
+            cp infra/docker-compose.yml /tmp/release-assets/docker-compose.yml
+          fi
+          ls -la /tmp/release-assets/ || true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          body_path: ${{ steps.notes.outputs.notes_path }}
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          files: |
+            /tmp/release-assets/install.sh
+            /tmp/release-assets/install.ps1
+            /tmp/release-assets/docker-compose.yml
+          fail_on_unmatched_files: false

@@ -1,0 +1,122 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-lint:
+    name: python-lint (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [api, worker, embed-gateway]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ruff and mypy
+        run: |
+          python -m pip install --upgrade pip
+          pip install "ruff>=0.6" "mypy>=1.11"
+
+      - name: Skip if app dir missing
+        id: check
+        run: |
+          if [ -d "apps/${{ matrix.app }}" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::apps/${{ matrix.app }} not found, skipping"
+          fi
+
+      - name: Ruff check
+        if: steps.check.outputs.exists == 'true'
+        run: ruff check apps/${{ matrix.app }}
+
+      - name: Ruff format --check
+        if: steps.check.outputs.exists == 'true'
+        run: ruff format --check apps/${{ matrix.app }}
+
+      - name: Mypy (best-effort)
+        if: steps.check.outputs.exists == 'true'
+        continue-on-error: true
+        run: |
+          if [ -d "apps/${{ matrix.app }}/src" ]; then
+            mypy --ignore-missing-imports apps/${{ matrix.app }}/src || true
+          else
+            mypy --ignore-missing-imports apps/${{ matrix.app }} || true
+          fi
+
+  frontend-lint:
+    name: frontend-lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Enable pnpm via corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@latest --activate
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('apps/web/pnpm-lock.yaml', 'apps/web/package.json') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: TypeScript typecheck
+        run: pnpm tsc --noEmit
+
+      - name: Biome check (best-effort)
+        continue-on-error: true
+        run: |
+          if [ -f biome.json ] || [ -f biome.jsonc ]; then
+            pnpm exec biome check src/ || true
+          else
+            echo "::warning::biome config not found, skipping"
+          fi
+
+  shell-lint:
+    name: shell-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck
+        run: |
+          if compgen -G "scripts/*.sh" > /dev/null; then
+            shellcheck scripts/*.sh
+          else
+            echo "::warning::no scripts/*.sh found, skipping"
+          fi
