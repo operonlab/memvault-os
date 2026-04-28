@@ -10,14 +10,16 @@ services:
   api:
     image: memvault-api:dev
     build:
-      context: ../apps/api
-      dockerfile: Dockerfile
+      # context = repo root so apps/api/Dockerfile can COPY apps/worker too
+      # (worker container reuses this image with a different CMD).
+      context: ..
+      dockerfile: apps/api/Dockerfile
 
   worker:
     image: memvault-api:dev
     build:
-      context: ../apps/api
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: apps/api/Dockerfile
 
   web:
     image: memvault-web:dev

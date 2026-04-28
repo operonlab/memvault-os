@@ -310,23 +310,30 @@ def test_api_image_bundles_worker_module():
         r"^\s*COPY\s+apps/worker/?\s+", dockerfile, re.M
     ), "apps/api/Dockerfile must `COPY apps/worker/ ...` so the worker container's `python -m apps.worker.main` can resolve."
 
-    compose = (REPO_ROOT / "infra" / "docker-compose.yml").read_text()
-    for svc in ("api", "worker"):
-        # Look for `${svc}:\n ... build:\n ... context: ...` and assert
-        # context is NOT `../apps/api` (which would hide apps/worker).
-        block = re.search(
-            rf"^\s{{2}}{svc}:\n(.+?)(?=^\s{{0,2}}\w[^:]*:|\Z)",
-            compose,
-            re.M | re.S,
-        )
-        assert block, f"compose service '{svc}' not found"
-        ctx = re.search(r"build:\s*\n\s+(?:#[^\n]*\n\s+)*context:\s*(\S+)", block.group(1))
-        assert ctx, f"service '{svc}' has no build.context"
-        assert ctx.group(1) != "../apps/api", (
-            f"compose service '{svc}' uses context=../apps/api which hides "
-            f"apps/worker from the Dockerfile build — worker container "
-            f"will fail with ModuleNotFoundError. Use context=.."
-        )
+    # Check EVERY docker-compose*.yml file — dev override could re-introduce
+    # the bug if not kept consistent with the base file.
+    for compose_path in sorted((REPO_ROOT / "infra").glob("docker-compose*.yml")):
+        compose = compose_path.read_text()
+        for svc in ("api", "worker"):
+            # Match `^  <svc>:` and capture until the next sibling key.
+            block = re.search(
+                rf"^\s{{2}}{svc}:\n(.+?)(?=^\s{{0,2}}\w[^:]*:|\Z)",
+                compose,
+                re.M | re.S,
+            )
+            if not block:
+                continue  # service not present in this override file
+            ctx = re.search(
+                r"build:\s*\n\s+(?:#[^\n]*\n\s+)*context:\s*(\S+)",
+                block.group(1),
+            )
+            if not ctx:
+                continue  # service present but has no build block
+            assert ctx.group(1) != "../apps/api", (
+                f"{compose_path.name}::{svc} uses context=../apps/api which "
+                f"hides apps/worker from the Dockerfile build — worker "
+                f"container will fail with ModuleNotFoundError. Use context=.."
+            )
 
 
 # ---------------------------------------------------------------------------
