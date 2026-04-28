@@ -27,6 +27,10 @@ $ErrorActionPreference = 'Stop'
 function New-Secret {
     [CmdletBinding()]
     param([int]$Length = 24)
+    # WHY hex (not base64): POSTGRES_PASSWORD / REDIS_PASSWORD are interpolated
+    # into postgresql://user:PWD@host and redis://:PWD@host URLs in
+    # infra/docker-compose.yml. base64 contains '+', '/', '=' which break URL
+    # parsing in the user-info section. Hex is fully URL-safe ([0-9a-f]).
     $bytes = [byte[]]::new($Length)
     $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
     try {
@@ -34,10 +38,10 @@ function New-Secret {
     } finally {
         $rng.Dispose()
     }
-    return [Convert]::ToBase64String($bytes)
+    return -join ($bytes | ForEach-Object { $_.ToString('x2') })
 }
 
-# Keys that must be auto-generated and their byte length (base64 input bytes).
+# Keys that must be auto-generated and their byte length (random bytes in).
 # Matches scripts/generate-secrets.sh in length where applicable.
 $SecretSpec = [ordered]@{
     'POSTGRES_PASSWORD'   = 24

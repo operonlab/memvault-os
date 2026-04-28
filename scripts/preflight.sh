@@ -138,7 +138,18 @@ write_env_port() {
   local key="$1"
   local value="$2"
   local env_file="${ROOT_DIR}/.env"
-  [[ -f "${env_file}" ]] || return 0
+  # WHY 容錯：若 .env 不存在（preflight 被獨立呼叫，或 install.sh 順序錯），
+  # 用 .env.example 初始化避免靜默吞掉使用者輸入的 port。
+  if [[ ! -f "${env_file}" ]]; then
+    if [[ -f "${ROOT_DIR}/.env.example" ]]; then
+      cp "${ROOT_DIR}/.env.example" "${env_file}"
+      log ".env 不存在，已從 .env.example 初始化"
+    else
+      err "找不到 ${env_file} 也找不到 .env.example，無法寫入 ${key}=${value}"
+      HARD_FAIL=1
+      return 1
+    fi
+  fi
   local tmp
   tmp="$(mktemp)"
   local replaced=0

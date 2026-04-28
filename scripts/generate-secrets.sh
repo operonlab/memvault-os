@@ -75,7 +75,10 @@ set_env() {
   mv "${tmp}" "${ENV_FILE}"
 }
 
-# fill_secret KEY BYTES → 若空才用 openssl rand -base64 BYTES 填入
+# fill_secret KEY BYTES → 若空才用 openssl rand -hex BYTES 填入
+# WHY hex (not base64): POSTGRES_PASSWORD / REDIS_PASSWORD 直接被嵌入
+# postgresql://user:PWD@host 與 redis://:PWD@host URL（見 docker-compose.yml）。
+# base64 含 '+', '/', '=' 會破 URL parsing 的 user-info 段。hex 為 [0-9a-f]，URL-safe。
 fill_secret() {
   local key="$1"
   local bytes="$2"
@@ -86,9 +89,9 @@ fill_secret() {
     return 0
   fi
   local value
-  value="$(openssl rand -base64 "${bytes}" | tr -d '\n')"
+  value="$(openssl rand -hex "${bytes}")"
   set_env "${key}" "${value}"
-  log "${key} 已產生 (base64 ${bytes} bytes)"
+  log "${key} 已產生 (hex ${bytes} bytes)"
 }
 
 main() {

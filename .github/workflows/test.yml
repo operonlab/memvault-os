@@ -102,11 +102,11 @@ jobs:
             echo "::warning::alembic.ini not found, skipping migrations"
           fi
 
-      - name: Run pytest (unit smoke only)
+      - name: Run pytest (unit + install-script regression)
         working-directory: apps/api
         # test_e2e_api.py needs a running docker-compose stack and is run
         # as part of dev verification, not in unit-test CI.
-        run: pytest tests/test_smoke.py -v --tb=short
+        run: pytest tests/test_smoke.py tests/test_install_scripts.py -v --tb=short
 
   frontend-tests:
     name: frontend-tests

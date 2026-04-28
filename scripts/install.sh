@@ -129,6 +129,24 @@ clone_or_use_local() {
 }
 
 # ---------------------------------------------------------------------------
+# Step 3.5. .env 必須存在（preflight 才能寫 port）
+#
+# WHY：preflight.sh 的 write_env_port 用 `[[ -f .env ]] || return 0` 早返，
+# 若 .env 不存在，使用者輸入新 port 會被靜默吞掉。所以 install.sh 必須在
+# run_preflight 之前確保 .env 存在（從 .env.example 複製）。
+# ---------------------------------------------------------------------------
+ensure_env_exists() {
+  if [[ -f "${ROOT_DIR}/.env" ]]; then
+    return 0
+  fi
+  if [[ ! -f "${ROOT_DIR}/.env.example" ]]; then
+    die "找不到 ${ROOT_DIR}/.env.example，無法初始化"
+  fi
+  cp "${ROOT_DIR}/.env.example" "${ROOT_DIR}/.env"
+  log "已從 .env.example 建立 .env（preflight 將寫入 port，generate-secrets 將寫入密鑰）"
+}
+
+# ---------------------------------------------------------------------------
 # Step 4. .env
 # ---------------------------------------------------------------------------
 generate_secrets() {
@@ -181,18 +199,19 @@ detect_embedding_backend() {
 # Step 6. LLM 強制配置
 # ---------------------------------------------------------------------------
 prompt_llm_provider() {
-  printf "\n%s\n" "請選擇 LLM provider（必選一條，無「跳過」選項）："
+  printf "\n%s\n" "請選擇 LLM provider："
   printf "  1) OpenAI       (需 OPENAI_API_KEY)\n"
   printf "  2) Anthropic    (需 ANTHROPIC_API_KEY)\n"
   printf "  3) Google Gemini(需 GEMINI_API_KEY)\n"
   printf "  4) DeepSeek     (需 DEEPSEEK_API_KEY)\n"
   printf "  5) 本地 Ollama  (host.docker.internal:11434)\n"
+  printf "  6) 暫時跳過    (離線模式 — 先把 stack 跑起來，之後再補 key 並執行 doctor.sh)\n"
   local choice
   while :; do
-    read -r -p "選擇 [1-5]: " choice
+    read -r -p "選擇 [1-6]: " choice
     case "${choice}" in
-      1|2|3|4|5) printf '%s\n' "${choice}"; return 0 ;;
-      *) warn "請輸入 1-5" ;;
+      1|2|3|4|5|6) printf '%s\n' "${choice}"; return 0 ;;
+      *) warn "請輸入 1-6" ;;
     esac
   done
 }
@@ -269,7 +288,17 @@ hint_msg() {
 }
 
 configure_llm() {
-  title "6. LLM 配置（強制至少一條 smoke test 通過）"
+  title "6. LLM 配置（至少一條 smoke test 通過，或選擇離線模式）"
+
+  # 環境變數短路：CI / 自動化情境可用 MEMVAULT_SKIP_LLM=1 跳過互動
+  # 已存在的 LLM key 會在 doctor.sh / 啟動後自然生效。
+  if [[ "${MEMVAULT_SKIP_LLM:-0}" == "1" || "${OFFLINE_MODE:-0}" == "1" ]]; then
+    warn "MEMVAULT_SKIP_LLM=1 / OFFLINE_MODE=1 — 跳過 LLM smoke test"
+    set_env MEMVAULT_LLM_DEFERRED 1
+    info "稍後在 .env 填入任一 LLM key 後執行：bash scripts/doctor.sh"
+    return 0
+  fi
+
   while :; do
     local choice
     choice="$(prompt_llm_provider)"
@@ -283,6 +312,12 @@ configure_llm() {
       5)
         info "本地 Ollama 模式 — 確保 host 已跑 ollama serve 並 pull qwen2.5:7b"
         model_alias="ollama/qwen2.5:7b"
+        ;;
+      6)
+        warn "已選擇離線模式 — stack 會啟動，但 LLM 相關功能（briefing/synth/triple-extract）將回 503"
+        set_env MEMVAULT_LLM_DEFERRED 1
+        info "稍後在 .env 填入任一 LLM key 後執行：bash scripts/doctor.sh"
+        return 0
         ;;
     esac
 
@@ -300,10 +335,11 @@ configure_llm() {
 
     if llm_smoke_test "${model_alias}"; then
       log "LLM provider 設定完成：${model_alias}"
+      set_env MEMVAULT_LLM_DEFERRED 0
       return 0
     fi
 
-    warn "smoke test 未通過，請重新選擇或更換 key"
+    warn "smoke test 未通過，請重新選擇或更換 key（或選 6 暫時跳過）"
   done
 }
 
@@ -331,6 +367,23 @@ ensure_onnx_model() {
     die "ONNX 模型下載失敗 — embed-gateway 將拒絕產生向量。請手動跑 ${script} 後重試"
   fi
   log "ONNX model 就緒：${target}"
+}
+
+# ---------------------------------------------------------------------------
+# Step 6.0. Compose image 預備（必須在 configure_llm 之前）
+#
+# WHY：configure_llm 會 `docker compose up -d litellm` 跑 smoke test。litellm
+# image 是 `ghcr.io/berriai/litellm:main-stable@${LITELLM_DIGEST}`。若 .env 內
+# LITELLM_DIGEST 仍是 placeholder（sha256:000...），pull 必失敗 manifest unknown。
+# 因此 placeholder 偵測 + pin-images.sh 補真實 digest + 建自家 image 必須先做。
+# ---------------------------------------------------------------------------
+PLACEHOLDER_FALLBACK_APPLIED=0
+
+prepare_compose_files() {
+  title "6.0. Image 預備（pin third-party digest + build self images）"
+  if detect_placeholder_digest; then
+    PLACEHOLDER_FALLBACK_APPLIED=1
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -386,7 +439,7 @@ detect_placeholder_digest() {
 
 compose_up() {
   title "7. 拉 image + 啟動"
-  if detect_placeholder_digest; then
+  if (( PLACEHOLDER_FALLBACK_APPLIED == 1 )); then
     info "Build mode 已備齊 image — 略過 docker compose pull"
   else
     ( cd "${ROOT_DIR}" && docker compose pull )
@@ -478,9 +531,11 @@ main() {
   printf '%bmemvault-os installer%b (macOS / Linux)\n' "${BOLD}" "${RESET}"
   detect_os
   clone_or_use_local
+  ensure_env_exists       # .env 必須早於 preflight 存在（preflight 會寫 port）
   run_preflight
   generate_secrets
   detect_embedding_backend
+  prepare_compose_files   # pin third-party digest + build self images（必須在 configure_llm 之前）
   configure_llm
   ensure_onnx_model
   compose_up
