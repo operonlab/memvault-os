@@ -143,6 +143,35 @@ MEMVAULT_TEST_BASE_URL=http://localhost:8080 \
 
 ---
 
+## 維運注意事項
+
+### 同一台機器跑多個 install
+
+`infra/docker-compose.yml` 寫死 `name: memvault`，所以兩個 clone 都 `docker compose up`
+時會綁同一個 Compose project — 互相 recreate 容器、共用 volumes。對單一安裝
+（一般用戶）這是想要的行為；要平行跑兩套（例如 dev + staging）每次 compose 調用都
+要覆寫 project name：
+
+```bash
+COMPOSE_PROJECT_NAME=memvault-dev    bash scripts/install.sh
+COMPOSE_PROJECT_NAME=memvault-stage  bash scripts/install.sh
+```
+
+host port（`API_PORT` / `WEB_PORT`）與 `.env` 內的 secret 也要每個 project 各自獨立；
+preflight 會偵測 port 衝突。
+
+### 使用外部 PostgreSQL（進階）
+
+bundled `pgvector/pgvector` image 以 superuser 跑，`infra/postgres/init.sql` 已預先
+建好 `vector` extension。如果指向 managed / 外部 Postgres（如 RDS、Supabase），
+alembic baseline migration 的 `CREATE EXTENSION IF NOT EXISTS vector` 會失敗，除非：
+
+* 連線 user 有 `SUPERUSER`（或 `CREATE` on database，且伺服器已裝 pgvector），**或**
+* DBA 已先在 DB 上手動裝好 extension 後才跑 `bash scripts/install.sh`
+
+大多 managed Postgres 服務都已預裝 pgvector，只要 privileged role 跑一次
+`CREATE EXTENSION vector;` 即可。之後 migration 就能在非 superuser 應用帳號下正常跑。
+
 ## Roadmap（v1.0.1 後續）
 
 - **Linux + Windows 端到端驗證** — 三軌 `install.sh` / `install.ps1` 路徑。

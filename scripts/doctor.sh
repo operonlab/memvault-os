@@ -144,8 +144,10 @@ if is_running litellm; then
     if [[ "${LITELLM_OK}" == "1" ]]; then
         ok "litellm /health/liveliness OK"
     elif [[ "${LLM_DEFERRED}" == "1" ]]; then
-        warn "litellm unhealthy — install ran in offline mode (MEMVAULT_LLM_DEFERRED=1)"
-        hint "Add at least one provider key (e.g. OPENAI_API_KEY=sk-...) in .env, then:"
+        warn "litellm pending — install ran in offline mode (MEMVAULT_LLM_DEFERRED=1)"
+        hint "This is expected. The stack is fully functional except for"
+        hint "LLM-dependent endpoints (briefing / synth / triple-extract)."
+        hint "To enable: add a provider key (e.g. OPENAI_API_KEY=sk-...) in .env, then:"
         hint "  docker compose restart litellm  &&  bash scripts/doctor.sh"
         mark_warn
     elif [[ "${HAS_PROVIDER_KEY}" == "1" ]]; then
@@ -168,17 +170,45 @@ else
 fi
 
 section "Embed gateway"
-if is_running embed-gateway; then
-    payload='{"input":["doctor health probe"]}'
-    response="$(dc exec -T embed-gateway sh -c \
-        "curl -fsS -X POST http://localhost:8081/embed -H 'Content-Type: application/json' -d '${payload}'" 2>/dev/null || true)"
-    if [[ -z "${response}" ]]; then
-        fail "embed-gateway POST /embed returned no body"
-        hint "Backend: ${EMBED_BACKEND:-onnx}. docker compose logs embed-gateway"
-        mark_fail
+# WHY backend-aware probe: for MLX (mlx_proxy), embed-gateway forwards the
+# POST /embed request to a host-side sidecar via
+# host.docker.internal:18081. That outbound call may legitimately fail
+# (sidecar warming up, firewall) — that's an MLX problem, not a stack
+# problem. So we probe /healthz inside the container first; the full
+# POST /embed contract test only runs for in-process backends (ONNX + vLLM).
+if ! is_running embed-gateway; then
+    fail "embed-gateway not running"
+    hint "Run: docker compose up -d embed-gateway"
+    mark_fail
+else
+    backend="${EMBED_BACKEND:-onnx}"
+    if dc exec -T embed-gateway sh -c \
+        'curl -fsS http://localhost:8081/healthz >/dev/null 2>&1 \
+         || curl -fsS http://localhost:8081/health  >/dev/null 2>&1' >/dev/null 2>&1; then
+        ok "embed-gateway /healthz OK (backend=${backend})"
+    elif dc exec -T embed-gateway sh -c 'echo > /dev/tcp/localhost/8081' >/dev/null 2>&1; then
+        ok "embed-gateway tcp:8081 reachable (backend=${backend})"
     else
-        # Accept either {data:[{embedding:[...]}]} or {embeddings:[[...]]}
-        dim="$(printf '%s' "${response}" | python3 -c '
+        fail "embed-gateway 8081 unreachable"
+        hint "docker compose logs --tail 100 embed-gateway"
+        mark_fail
+    fi
+    if [[ "${backend}" == "mlx_proxy" ]]; then
+        info "Skipping POST /embed contract test on MLX backend"
+        info "(host MLX sidecar warm-up is independent; run"
+        info " \`curl http://127.0.0.1:18081/health\` to verify MLX directly)"
+    else
+        # In-process backends: full /embed contract probe.
+        payload='{"input":["doctor health probe"]}'
+        response="$(dc exec -T embed-gateway sh -c \
+            "curl -fsS -X POST http://localhost:8081/embed -H 'Content-Type: application/json' -d '${payload}'" 2>/dev/null || true)"
+        if [[ -z "${response}" ]]; then
+            fail "embed-gateway POST /embed returned no body"
+            hint "Backend: ${backend}. docker compose logs embed-gateway"
+            mark_fail
+        else
+            # Accept either {data:[{embedding:[...]}]} or {embeddings:[[...]]}
+            dim="$(printf '%s' "${response}" | python3 -c '
 import json, sys
 try:
     payload = json.load(sys.stdin)
@@ -194,21 +224,19 @@ if isinstance(payload, dict):
         emb = payload["embedding"]
 print(len(emb) if isinstance(emb, list) else 0)
 ' 2>/dev/null || echo 0)"
-        if [[ "${dim}" == "1024" ]]; then
-            ok "embed-gateway returned 1024-d vector (backend=${EMBED_BACKEND:-onnx})"
-        elif [[ "${dim}" =~ ^[0-9]+$ ]] && [[ "${dim}" -gt 0 ]]; then
-            warn "embed-gateway returned ${dim}-d vector (expected 1024)"
-            hint "EMBED_DIM mismatch — Qdrant collection is locked at 1024."
-            mark_warn
-        else
-            fail "embed-gateway response could not be parsed"
-            hint "Sample response: $(printf '%s' "${response}" | head -c 200)"
-            mark_fail
+            if [[ "${dim}" == "1024" ]]; then
+                ok "embed-gateway returned 1024-d vector (backend=${backend})"
+            elif [[ "${dim}" =~ ^[0-9]+$ ]] && [[ "${dim}" -gt 0 ]]; then
+                warn "embed-gateway returned ${dim}-d vector (expected 1024)"
+                hint "EMBED_DIM mismatch — Qdrant collection is locked at 1024."
+                mark_warn
+            else
+                fail "embed-gateway response could not be parsed"
+                hint "Sample response: $(printf '%s' "${response}" | head -c 200)"
+                mark_fail
+            fi
         fi
     fi
-else
-    fail "embed-gateway not running"
-    mark_fail
 fi
 
 section "API readiness"
@@ -224,8 +252,19 @@ fi
 
 section "Alembic migrations"
 if is_running api; then
-    current="$(dc exec -T api alembic current 2>/dev/null | awk '/\(head\)/{print $1; exit} /^[a-f0-9]{12,}/{print $1; exit}' || true)"
-    heads="$(dc exec -T api alembic heads 2>/dev/null | awk '/^[a-f0-9]{12,}/{print $1}' | sort -u || true)"
+    # WHY broader regex: legacy alembic revision IDs were 12-char hex (e.g.
+    # "a3f9b8c12d34"); v1.0.x migrations use named revisions like
+    # "0001_init_memvault_os". Old `^[a-f0-9]{12,}` regex matched neither
+    # the named one (underscores / letters) nor mixed forms — doctor
+    # always warned `alembic state unknown` even on a healthy stack.
+    # New regex: any non-blank line whose first token is a valid revision
+    # identifier (alnum + underscore, not starting with whitespace).
+    current="$(dc exec -T api alembic current 2>/dev/null \
+        | awk '/^[A-Za-z0-9_]+/ {print $1; exit}' \
+        || true)"
+    heads="$(dc exec -T api alembic heads 2>/dev/null \
+        | awk '/^[A-Za-z0-9_]+/ {print $1}' \
+        | sort -u || true)"
     if [[ -z "${current}" ]] || [[ -z "${heads}" ]]; then
         warn "alembic state unknown (current='${current}' heads='${heads}')"
         hint "docker compose exec api alembic current && alembic heads"

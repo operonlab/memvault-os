@@ -144,6 +144,45 @@ Expected: **42 / 42 pass** (verified locally on macOS Apple Silicon — CI runs 
 
 ---
 
+## Operational notes
+
+### Multiple installs on the same host
+
+The bundled `infra/docker-compose.yml` declares `name: memvault`, so two
+clones of this repo running `docker compose up` will both bind to the
+**same** Compose project — recreating each other's containers and
+sharing volumes. For ordinary users (single install) this is what you
+want. If you need two parallel installs (e.g. a dev + staging stack),
+override the project name on every compose call:
+
+```bash
+COMPOSE_PROJECT_NAME=memvault-dev    bash scripts/install.sh
+COMPOSE_PROJECT_NAME=memvault-stage  bash scripts/install.sh
+```
+
+The host ports (`API_PORT` / `WEB_PORT`) and the secrets in `.env` must
+also be unique per project; the install's pre-flight will catch port
+conflicts.
+
+### Using an external PostgreSQL (advanced)
+
+The bundled `pgvector/pgvector` image runs as a superuser, and
+`infra/postgres/init.sql` pre-creates the `vector` extension. If you
+point the stack at a managed/external Postgres (e.g. RDS, Supabase),
+the alembic baseline migration's `CREATE EXTENSION IF NOT EXISTS vector`
+will fail unless **either**:
+
+* the connection user has `SUPERUSER` (or `CREATE` on the database, plus
+  the `vector` extension's `vector.control` file is installed on the
+  server), **or**
+* a DBA has pre-installed the extension on the database before you run
+  `bash scripts/install.sh`.
+
+Most managed Postgres providers ship pgvector pre-installed; you only
+need to run `CREATE EXTENSION vector;` once as a privileged role. After
+that the migration will succeed under a non-superuser application
+account.
+
 ## Roadmap (post v1.0.1)
 
 - **Linux + Windows verified end-to-end** — three-tier `install.sh` / `install.ps1` paths.
