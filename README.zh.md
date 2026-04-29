@@ -26,7 +26,7 @@ v1.0.1 把它們收斂掉，目標是**讓不懂技術的 macOS 使用者只要 
 |------|------|
 | Fresh-clone `install.sh` 端到端（macOS Apple Silicon, 真實 PTY 互動） | ✅ 已驗 — 8 / 8 容器啟動、alembic 18 張表、Web UI HTTP 200 |
 | 真實 E2E HTTP 測試 | ✅ **42 / 42** 全綠（v1.0.0 是 40 / 42） |
-| ghcr.io 預編 image | ✅ 公開 — `ghcr.io/operonlab/memvault-{api,web,embed-gateway}:1.0.0` |
+| ghcr.io 預編 image | ✅ 公開 — `ghcr.io/operonlab/memvault-{api,web,embed-gateway}:1.0.0`（v1.0.1 git tag 落地時 CI 會自動 build & push 新 `1.0.1` tag） |
 | Install 流程 regression test 在 CI | ✅ 11 條靜態檢查防止 install path 退化 |
 | Codex adversarial review (v1.0.0) | ✅ 6 條（2 critical / 3 high / 1 medium）全修 |
 | 離線模式安裝（無 LLM key） | ✅ 不填 key 也能完整裝起來，之後再補 key + `doctor.sh` 復檢 |

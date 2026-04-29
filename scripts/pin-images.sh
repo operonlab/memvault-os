@@ -46,21 +46,25 @@ declare -a IMAGES=(
     "MINIO|minio/minio:RELEASE.2024-12-13T22-19-12Z"
 )
 
-# resolve_digest <image_ref>  — prints "sha256:..." (multi-arch index digest if available).
+# resolve_digest <image_ref>  — prints "sha256:..." (multi-arch index digest).
+#
+# WHY fail-closed (no local-pull fallback):
+#   The earlier fallback (`docker pull` + `image inspect` → RepoDigests) would
+#   write a *platform-specific* digest (whichever arch the host happens to be).
+#   When that arm64 digest is then used in a Linux/amd64 install, docker pull
+#   errors with "manifest unknown" or "incompatible platform". The whole point
+#   of pin-images is to lock to a multi-arch index that is portable across
+#   architectures — buildx imagetools is the only call that returns one.
+#
+# If buildx is unavailable, prints empty and the caller (main loop) skips
+# updating that var — better to leave the existing digest than poison
+# .env.example with an architecture-locked one.
 resolve_digest() {
     local ref="$1" digest=""
-    if command -v docker >/dev/null 2>&1; then
-        # Prefer buildx imagetools (works without a local pull and returns the manifest list digest).
-        if docker buildx imagetools inspect "${ref}" >/dev/null 2>&1; then
-            digest="$(docker buildx imagetools inspect "${ref}" 2>/dev/null \
-                | awk '/^Digest:/ {print $2; exit}')"
-        fi
-        # Fallback: pull + parse RepoDigests (architecture-specific).
-        if [[ -z "${digest}" ]]; then
-            docker pull "${ref}" >/dev/null 2>&1 || true
-            digest="$(docker image inspect "${ref}" --format '{{range .RepoDigests}}{{println .}}{{end}}' 2>/dev/null \
-                | awk -F'@' '/sha256:/ {print $2; exit}')"
-        fi
+    if command -v docker >/dev/null 2>&1 \
+        && docker buildx imagetools inspect "${ref}" >/dev/null 2>&1; then
+        digest="$(docker buildx imagetools inspect "${ref}" 2>/dev/null \
+            | awk '/^Digest:/ {print $2; exit}')"
     fi
     printf '%s' "${digest}"
 }
@@ -95,22 +99,32 @@ for entry in "${IMAGES[@]}"; do
         printf '       was: %s\n' "${current:-<unset>}"
         printf '       new: %s\n' "${digest}"
     else
-        # Replace the value while keeping any trailing comment intact.
-        # Pattern: ^VAR=<value>(<spaces><# comment>)?
-        python3 - "${TMP}" "${var}" "${digest}" <<'PY'
-import io, re, sys
-path, var, digest = sys.argv[1], sys.argv[2], sys.argv[3]
-with io.open(path, "r", encoding="utf-8") as f:
-    text = f.read()
-pattern = re.compile(rf'^({re.escape(var)}=)([^\s#]*)(\s*#.*)?$', re.MULTILINE)
-def repl(m):
-    return f"{m.group(1)}{digest}{m.group(3) or ''}"
-new_text, n = pattern.subn(repl, text)
-if n == 0:
-    sys.stderr.write(f"warning: {var} not found in {path}\n")
-with io.open(path, "w", encoding="utf-8") as f:
-    f.write(new_text)
-PY
+        # Replace VAR=<old> with VAR=<digest>, preserve trailing comment.
+        # WHY awk (not python3): pin-images is part of the install path; we
+        # cannot assume a working `python3` on a fresh node — the user's PATH
+        # may resolve to brew Python which lacks our packages, or no Python at
+        # all. awk is in every POSIX environment and does the same job.
+        awk_tmp="$(mktemp)"
+        awk -v var="${var}" -v digest="${digest}" '
+            BEGIN { found=0 }
+            {
+                if ($0 ~ "^" var "=") {
+                    comment=""
+                    if (match($0, /[[:space:]]+#.*$/)) {
+                        comment = substr($0, RSTART, RLENGTH)
+                    }
+                    print var "=" digest comment
+                    found=1
+                } else {
+                    print $0
+                }
+            }
+            END {
+                if (!found) {
+                    print "warning: " var " not found in " FILENAME > "/dev/stderr"
+                }
+            }
+        ' "${TMP}" > "${awk_tmp}" && mv "${awk_tmp}" "${TMP}"
         ok "${var} updated"
     fi
 done

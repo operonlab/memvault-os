@@ -12,11 +12,24 @@ cd "${REPO_ROOT}"
 # Compose wrapper — honors COMPOSE_FILE from .env
 COMPOSE_FILE_DEFAULT="infra/docker-compose.yml"
 
+# WHY safe_source_dotenv (not `set -a; source .env`):
+#   `source` treats every value as a shell expression. POSTGRES_PASSWORD or
+#   OPENAI_API_KEY containing `$`, backtick, or `\` would either be expanded
+#   unpredictably or rejected by `set -u`. safe_source_dotenv (in _dotenv.sh)
+#   iterates the file line-by-line and uses `printf -v` for assignment, which
+#   never re-expands the RHS. See codex review slice 1 #5.
+# shellcheck source=./_dotenv.sh
+[[ -f "${SCRIPT_DIR}/_dotenv.sh" ]] && source "${SCRIPT_DIR}/_dotenv.sh"
 if [[ -f "${REPO_ROOT}/.env" ]]; then
-    set -a
-    # shellcheck disable=SC1091
-    source "${REPO_ROOT}/.env"
-    set +a
+    if declare -F safe_source_dotenv >/dev/null 2>&1; then
+        safe_source_dotenv "${REPO_ROOT}/.env"
+    else
+        # Fallback: legacy behaviour if _dotenv.sh is missing for any reason.
+        set -a
+        # shellcheck disable=SC1091
+        source "${REPO_ROOT}/.env"
+        set +a
+    fi
 fi
 
 : "${COMPOSE_FILE:=${COMPOSE_FILE_DEFAULT}}"

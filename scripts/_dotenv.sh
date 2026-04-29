@@ -57,3 +57,40 @@ read_dotenv_value() {
         }
     ' "${file}"
 }
+
+# safe_source_dotenv [path]  — export every KEY=VALUE in the dotenv file
+# WITHOUT subjecting values to shell expansion.
+#
+# WHY (codex slice 1 #5): the previous `set -a; source .env; set +a` pattern
+# in scripts/_lib.sh treated every value as a shell expression. Any password
+# or API key containing `$`, backtick, or `\` was either expanded
+# unpredictably or rejected with `set -u`. This helper iterates the file
+# line by line, normalises the value via read_dotenv_value (already handles
+# quotes / inline comments / whitespace), and uses `export VAR="value"`
+# with the value passed as a literal — bash's variable assignment rules do
+# NOT re-expand the right-hand side of an `=` assignment.
+safe_source_dotenv() {
+    local file="${1:-${REPO_ROOT:-.}/.env}"
+    [[ -f "${file}" ]] || return 0
+    local key value line eq
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        # Skip blank lines and full-line comments.
+        [[ "${line}" =~ ^[[:space:]]*$ ]] && continue
+        [[ "${line}" =~ ^[[:space:]]*# ]] && continue
+        eq="${line%%=*}"
+        # Skip lines without an `=` (eq == line means no `=` was found).
+        [[ "${eq}" == "${line}" ]] && continue
+        # Trim whitespace around the key.
+        key="${eq#"${eq%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        # Reject identifiers that aren't legal env-var names.
+        [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        # Reuse read_dotenv_value for value normalisation (quotes, comments,
+        # whitespace) — slower than a single pass but the .env files are
+        # small (< 200 lines) and we get the exact same parser.
+        value="$(read_dotenv_value "${key}" "${file}")"
+        # `printf -v` assigns without expanding the value.
+        printf -v "${key}" '%s' "${value}"
+        export "${key?}"
+    done <"${file}"
+}

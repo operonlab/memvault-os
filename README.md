@@ -27,7 +27,7 @@ macOS user can `git clone` and run one command**.
 |------|--------|
 | Fresh-clone `install.sh` end-to-end (macOS Apple Silicon, real PTY) | ✅ verified — 8 / 8 containers up, alembic 18 tables, web UI HTTP 200 |
 | Real E2E HTTP tests | ✅ **42 / 42** pass (was 40 / 42 in v1.0.0) |
-| Pre-built images on ghcr.io | ✅ Public — `ghcr.io/operonlab/memvault-{api,web,embed-gateway}:1.0.0` |
+| Pre-built images on ghcr.io | ✅ Public — `ghcr.io/operonlab/memvault-{api,web,embed-gateway}:1.0.0` (the `1.0.1` tag will be auto-built and pushed when the v1.0.1 git tag lands) |
 | Install regression tests in CI | ✅ 11 static checks guard the install path against regressions |
 | Codex adversarial review (v1.0.0) | ✅ All 6 findings (2 critical / 3 high / 1 medium) addressed |
 | Offline / no-key install mode | ✅ Stack boots without any LLM key — fill `.env` later, then `doctor.sh` |

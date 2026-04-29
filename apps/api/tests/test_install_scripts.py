@@ -719,6 +719,225 @@ def test_readme_blocker_count_matches_letter_set():
         )
 
 
+def test_prompt_llm_provider_emits_only_choice_to_stdout(tmp_path: Path):
+    """Functional Bug J test (replaces fragile source-grep heuristic).
+
+    Spawn a real bash subshell, source install.sh's prompt_llm_provider in
+    isolation, feed `x\\n6\\n` on stdin (invalid then valid), and assert that
+    the value the caller would capture via $() is the bare string "6" — not
+    the menu text or the warn line.
+
+    The earlier static check only asserted that menu printfs use `>&2`, which
+    is bypassable by switching to `echo`, heredocs, `print -r --`, etc.
+    """
+    if not shutil.which("bash"):
+        pytest.skip("bash not available")
+
+    install_sh = (SCRIPTS / "install.sh").read_text()
+    fn = re.search(
+        r"^prompt_llm_provider\(\)\s*\{.*?^\}",
+        install_sh,
+        re.M | re.S,
+    )
+    assert fn, "install.sh: prompt_llm_provider() not found"
+
+    # Stub the helpers (warn_ui / info_ui / warn) so the function can run
+    # without sourcing the rest of install.sh (which would invoke main()).
+    runner = tmp_path / "run.sh"
+    runner.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        "warn_ui() { printf '⚠ %s\\n' \"$*\" >&2; }\n"
+        "info_ui() { printf 'ℹ %s\\n' \"$*\" >&2; }\n"
+        "warn()    { printf '⚠ %s\\n' \"$*\"; }\n"  # legacy stub, may exist
+        f"{fn.group(0)}\n"
+        "out=\"$(prompt_llm_provider)\"\n"
+        "printf 'CAPTURED:[%s]\\n' \"$out\"\n"
+    )
+    runner.chmod(0o755)
+
+    proc = subprocess.run(
+        ["bash", str(runner)],
+        input="x\n6\n",
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert proc.returncode == 0, (
+        f"runner failed (exit {proc.returncode}):\nstdout={proc.stdout!r}\n"
+        f"stderr={proc.stderr!r}"
+    )
+    assert "CAPTURED:[6]" in proc.stdout, (
+        f"prompt_llm_provider stdout polluted: {proc.stdout!r}"
+    )
+
+
+def test_alembic_env_create_schema_inside_with_block_ast():
+    """AST-based Bug H regression (replaces fragile char-position heuristic).
+
+    The original test only checked that `connection.execute(... CREATE
+    SCHEMA ...)` appears textually after `context.begin_transaction()`. A
+    de-dented call placed AFTER the With block would still pass that
+    text-order check yet still trigger the bug. This test parses
+    do_run_migrations and asserts every CREATE SCHEMA call lives inside a
+    `with context.begin_transaction()` With node.
+    """
+    import ast
+
+    src = (REPO_ROOT / "apps" / "api" / "alembic" / "env.py").read_text()
+    tree = ast.parse(src)
+
+    target_fn = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "do_run_migrations":
+            target_fn = node
+            break
+    assert target_fn is not None, "alembic/env.py: do_run_migrations not found"
+
+    def is_create_schema_call(node: ast.AST) -> bool:
+        # Match connection.execute(text("... CREATE SCHEMA ..."))
+        if not isinstance(node, ast.Call):
+            return False
+        # Walk the call's children for any string literal containing CREATE SCHEMA.
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str) \
+                    and "CREATE SCHEMA" in sub.value.upper():
+                return True
+        return False
+
+    def is_begin_transaction_with(node: ast.AST) -> bool:
+        if not isinstance(node, ast.With):
+            return False
+        for item in node.items:
+            ce = item.context_expr
+            if isinstance(ce, ast.Call) and isinstance(ce.func, ast.Attribute) \
+                    and ce.func.attr == "begin_transaction":
+                return True
+        return False
+
+    # Collect WITH-blocks that gate begin_transaction.
+    txn_blocks = [n for n in ast.walk(target_fn) if is_begin_transaction_with(n)]
+    assert txn_blocks, "do_run_migrations must call context.begin_transaction()"
+
+    # Find every CREATE SCHEMA call in the function.
+    all_create_calls = [
+        n for n in ast.walk(target_fn) if is_create_schema_call(n)
+    ]
+    assert all_create_calls, "do_run_migrations must execute CREATE SCHEMA"
+
+    # Each CREATE SCHEMA call must descend from one of the txn_blocks.
+    txn_block_ids = {id(b) for b in txn_blocks}
+
+    def _has_ancestor_in(node, id_set):
+        # ast doesn't track parents — rebuild ancestor map.
+        for parent in ast.walk(target_fn):
+            for child in ast.iter_child_nodes(parent):
+                if child is node:
+                    if id(parent) in id_set:
+                        return True
+                    return _has_ancestor_in(parent, id_set)
+        return False
+
+    for call in all_create_calls:
+        # Every walk of a txn block contains this call?
+        in_txn = any(call in list(ast.walk(b)) for b in txn_blocks)
+        assert in_txn, (
+            "CREATE SCHEMA call must be a descendant of "
+            "`with context.begin_transaction():` — otherwise the auto-began "
+            "transaction is rolled back by the async connection close."
+        )
+
+
+def test_pin_images_does_not_use_python3():
+    """pin-images.sh must rely on POSIX awk, not python3.
+
+    Codex slice 1 #2: pin-images is part of the install path; users may not
+    have a working `python3` on their PATH (brew Python without our deps,
+    minimal containers, etc.). awk is in every POSIX environment.
+    """
+    text = (SCRIPTS / "pin-images.sh").read_text()
+    # Strip comments before grepping so the WHY-comment naming `python3` is OK.
+    no_comments = re.sub(r"#[^\n]*", "", text)
+    assert "python3" not in no_comments, (
+        "scripts/pin-images.sh must not invoke python3 — use awk for "
+        ".env.example rewrites so installs work without Python."
+    )
+
+
+def test_pin_images_resolve_digest_is_fail_closed():
+    """resolve_digest must NOT fall back to `docker pull` + image inspect.
+
+    Codex slice 1 #1: that fallback writes a platform-specific RepoDigest
+    (whichever arch the host is on). When the resulting .env.example digest
+    is then used in a different-arch install, `docker compose pull` errors
+    with "manifest unknown" or "no matching manifest". Better to leave the
+    existing digest than poison it with an arch-locked one.
+    """
+    text = (SCRIPTS / "pin-images.sh").read_text()
+    fn = re.search(
+        r"^resolve_digest\(\)\s*\{(.+?)^\}", text, re.M | re.S
+    )
+    assert fn, "scripts/pin-images.sh: resolve_digest() not found"
+    body = fn.group(1)
+    no_comments = re.sub(r"#[^\n]*", "", body)
+    assert "docker pull" not in no_comments, (
+        "resolve_digest must not call `docker pull` — that fallback writes "
+        "a platform-specific digest that breaks cross-arch installs."
+    )
+    assert "image inspect" not in no_comments, (
+        "resolve_digest must not parse RepoDigests from `image inspect` — "
+        "RepoDigests are arch-locked, not portable."
+    )
+
+
+def test_lib_uses_safe_source_dotenv():
+    """scripts/_lib.sh must source .env via safe_source_dotenv (printf -v),
+    not bash `source` which expands `$`/backtick/`\\` in passwords.
+    """
+    text = (SCRIPTS / "_lib.sh").read_text()
+    assert "safe_source_dotenv" in text, (
+        "scripts/_lib.sh must call safe_source_dotenv (defined in _dotenv.sh) "
+        "instead of `source ${REPO_ROOT}/.env`. Bare source expands `$` etc."
+    )
+
+
+def test_dotenv_safe_source_does_not_expand_dollar(tmp_path: Path):
+    """Functional check on safe_source_dotenv: a value containing a literal
+    `$` must NOT be re-evaluated by the shell.
+    """
+    if not shutil.which("bash"):
+        pytest.skip("bash not available")
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENAI_API_KEY=sk-${USER}-shouldNOTexpand-$(echo X)\n")
+
+    runner = tmp_path / "run.sh"
+    runner.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f'source "{SCRIPTS}/_dotenv.sh"\n'
+        f'safe_source_dotenv "{env_file}"\n'
+        'printf "VALUE:[%s]\\n" "${OPENAI_API_KEY}"\n'
+    )
+    runner.chmod(0o755)
+
+    proc = subprocess.run(
+        ["bash", str(runner)],
+        env={**os.environ, "USER": "ALICE"},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert proc.returncode == 0, (
+        f"safe_source_dotenv runner failed: stderr={proc.stderr!r}"
+    )
+    # The captured value must contain the LITERAL `${USER}` and `$(echo X)`,
+    # not the expanded "ALICE" or "X".
+    assert "VALUE:[sk-${USER}-shouldNOTexpand-$(echo X)]" in proc.stdout, (
+        f"safe_source_dotenv expanded shell metacharacters: {proc.stdout!r}"
+    )
+
+
 def test_ci_verifies_table_count_after_alembic():
     """CI must assert table count after `alembic upgrade head`.
 
