@@ -36,7 +36,7 @@ macOS user can `git clone` and run one command**.
 
 ### What changed since v1.0.0
 
-12 fresh-clone install blockers fixed. Each has a static regression test:
+11 fresh-clone install blockers fixed (labelled A–H, J–L; we skip the letter "I" so it doesn't get confused with digit "1"). Each has a static regression test:
 
 - **A** preflight prompted for a port replacement, then silently dropped the new port (`.env` did not exist yet).
 - **B** secrets were generated as base64 and ended up containing `+` / `/` / `=` which broke `postgresql://` and `redis://` URL parsing.
@@ -58,7 +58,7 @@ macOS user can `git clone` and run one command**.
 - Docker Desktop 24.0+
 - macOS Apple Silicon recommended (Linux x86_64 should work; only macOS is fully verified end-to-end)
 - ≥ 5 GB disk, ≥ 4 GB RAM
-- **No LLM key required to install** — pick offline mode and add a key later
+- **No LLM key required to install** — pick offline mode and add a key later. `litellm` will sit at `health: starting` until a real provider key is supplied; `scripts/doctor.sh` recognises this state and downgrades the warning. This is expected and does not block any other service.
 
 ### One-command install
 
@@ -108,7 +108,7 @@ MEMVAULT_TEST_BASE_URL=http://localhost:8080 \
   ./.e2e-venv/bin/python -m pytest tests/test_e2e_api.py -v
 ```
 
-Expected: **42 / 42 pass**.
+Expected: **42 / 42 pass** (verified locally on macOS Apple Silicon — CI runs the unit + install regression suite only; the e2e suite needs a live docker compose stack and runs as part of dev verification / nightly job).
 
 ---
 

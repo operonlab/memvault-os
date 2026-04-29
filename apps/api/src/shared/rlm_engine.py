@@ -51,9 +51,10 @@ class RLMConfig:
     compaction_threshold: int = 60_000  # chars in history before compacting
     repl_output_limit: int = 20_000  # max chars per REPL output
     verbose: bool = False
-    # LiteLLM / OpenAI-compatible API backend (None = use claude -p)
-    api_base: str | None = None  # e.g. "http://localhost:4000/v1"
-    api_key: str | None = None  # e.g. "sk-litellm-local-dev"
+    # LiteLLM / OpenAI-compatible API backend (None = use claude -p; otherwise
+    # honour LITELLM_BASE / LITELLM_KEY from compose env).
+    api_base: str | None = None  # e.g. http://litellm:4000/v1
+    api_key: str | None = None
     # tmux persistent backend (set to tmux window name, e.g. "rlm")
     tmux_target: str | None = None
 
@@ -142,8 +143,8 @@ def _call_openai_compat(
     system: str = "",
     model: str = "grok-4-fast",
     timeout: float = 120,
-    api_base: str = "http://localhost:4000/v1",
-    api_key: str = "",
+    api_base: str = os.environ.get("LITELLM_BASE", "http://litellm:4000/v1"),
+    api_key: str = os.environ.get("LITELLM_KEY", ""),
 ) -> str:
     """Call LLM via OpenAI-compatible API (LiteLLM, xAI, etc)."""
     import httpx

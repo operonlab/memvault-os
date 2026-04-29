@@ -6,6 +6,7 @@ local LLM (oMLX), then feeds results into the existing TripleService pipeline.
 """
 
 import logging
+import os
 
 from pydantic_ai import Agent
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -148,8 +149,11 @@ def _run_rlm_triple_extraction(content: str, block_type: str) -> list[dict[str, 
 
     config = RLMConfig(
         model="grok-4-fast",
-        api_base="http://localhost:4000/v1",
-        api_key="sk-litellm-local-dev",
+        # Honour compose-injected LITELLM_BASE / LITELLM_KEY (defaults match
+        # the in-network hostname used by infra/docker-compose.yml so this
+        # works both in-container and from a host-side script).
+        api_base=os.environ.get("LITELLM_BASE", "http://litellm:4000/v1"),
+        api_key=os.environ.get("LITELLM_KEY", "sk-litellm-local-dev"),
         max_iterations=5,
         max_timeout_secs=60,
     )

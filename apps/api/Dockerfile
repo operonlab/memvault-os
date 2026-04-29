@@ -21,7 +21,10 @@ RUN apt-get update \
         libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir uv
+# WHY pin uv: bare `pip install uv` resolves to whatever is current on PyPI,
+# making fallback (build-from-source) installs non-reproducible. uv 0.5.x is
+# the line we tested with; bump intentionally when exercising upgrades.
+RUN pip install --no-cache-dir 'uv==0.5.13'
 
 WORKDIR /app
 

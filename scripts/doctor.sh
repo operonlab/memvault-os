@@ -8,6 +8,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./_lib.sh
 source "${SCRIPT_DIR}/_lib.sh"
+# shellcheck source=./_dotenv.sh
+source "${SCRIPT_DIR}/_dotenv.sh"
 
 FAILED=0
 WARNED=0
@@ -103,18 +105,61 @@ fi
 section "LiteLLM connectivity"
 # Read MEMVAULT_LLM_DEFERRED flag from .env — install.sh sets this to 1 when
 # the user picked option 6 (offline mode) or set MEMVAULT_SKIP_LLM=1.
-LLM_DEFERRED="$(awk -F= '$1=="MEMVAULT_LLM_DEFERRED"{print $2; exit}' "${REPO_ROOT:-.}/.env" 2>/dev/null | tr -d '[:space:]')"
+# Use read_dotenv_value (from _dotenv.sh) so quoted / commented / spaced
+# values do not silently flip the flag.
+LLM_DEFERRED="$(read_dotenv_value MEMVAULT_LLM_DEFERRED)"
+
+# WHY retry-with-backoff: typical workflow is `add OPENAI_API_KEY -> docker
+# compose restart litellm -> bash scripts/doctor.sh`. litellm health can take
+# 10-30s to flip from `starting` to `healthy` while it warms prisma + provider
+# probes. Without retry, doctor would mis-report a freshly restarted litellm
+# as still-deferred. We only burn the retry budget when the user has actually
+# supplied a provider key — offline-mode installs short-circuit immediately.
+HAS_PROVIDER_KEY=0
+for k in OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY DEEPSEEK_API_KEY; do
+    v="$(read_dotenv_value "${k}")"
+    if [[ -n "${v}" ]]; then
+        HAS_PROVIDER_KEY=1
+        break
+    fi
+done
+
 if is_running litellm; then
-    if dc exec -T litellm curl -fsS http://localhost:4000/health/liveliness >/dev/null 2>&1; then
+    # 15 attempts × 2s ≈ 30s, otherwise single-shot.
+    if [[ "${HAS_PROVIDER_KEY}" == "1" ]]; then
+        RETRIES=15
+    else
+        RETRIES=1
+    fi
+    LITELLM_OK=0
+    for i in $(seq 1 "${RETRIES}"); do
+        if dc exec -T litellm curl -fsS http://localhost:4000/health/liveliness >/dev/null 2>&1; then
+            LITELLM_OK=1
+            break
+        fi
+        if [[ "${i}" -lt "${RETRIES}" ]]; then
+            sleep 2
+        fi
+    done
+    if [[ "${LITELLM_OK}" == "1" ]]; then
         ok "litellm /health/liveliness OK"
     elif [[ "${LLM_DEFERRED}" == "1" ]]; then
         warn "litellm unhealthy — install ran in offline mode (MEMVAULT_LLM_DEFERRED=1)"
         hint "Add at least one provider key (e.g. OPENAI_API_KEY=sk-...) in .env, then:"
         hint "  docker compose restart litellm  &&  bash scripts/doctor.sh"
         mark_warn
+    elif [[ "${HAS_PROVIDER_KEY}" == "1" ]]; then
+        # Key is present but health still fails after the retry window — not a
+        # missing-key problem; almost always a key-format / quota / network
+        # issue inside the litellm container itself.
+        fail "litellm health check failed after ~30s — provider key is set but litellm did not become healthy"
+        hint "docker compose logs --tail 100 litellm     # look for prisma / auth / 401 errors"
+        hint "Verify the key value in .env (no surrounding quotes, no trailing spaces) then: docker compose restart litellm"
+        mark_fail
     else
         fail "litellm health check failed"
-        hint "docker compose logs --tail 100 litellm — ensure at least one LLM key is set in .env"
+        hint "No provider key found in .env — set OPENAI_API_KEY (or ANTHROPIC_API_KEY / GEMINI_API_KEY / DEEPSEEK_API_KEY) and restart litellm"
+        hint "docker compose logs --tail 100 litellm"
         mark_fail
     fi
 else

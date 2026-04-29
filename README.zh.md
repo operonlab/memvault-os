@@ -33,7 +33,7 @@ v1.0.1 把它們收斂掉，目標是**讓不懂技術的 macOS 使用者只要 
 | Linux 端到端驗證 | ⚠️ 預編 image 已知可用；install 腳本只在 macOS 跑過 |
 | Windows install.ps1 端到端 | ⚠️ 結構與 macOS 對齊但尚未實機跑過 |
 
-### 自 v1.0.0 以來修補的 12 個 install 阻塞點
+### 自 v1.0.0 以來修補的 11 個 install 阻塞點（編號 A–H、J–L，刻意跳過字母「I」避免和數字「1」混淆）
 
 每一條都有對應的靜態 regression test：
 
@@ -57,7 +57,7 @@ v1.0.1 把它們收斂掉，目標是**讓不懂技術的 macOS 使用者只要 
 - Docker Desktop 24.0+
 - 推薦 macOS Apple Silicon（Linux x86_64 應該也行；只有 macOS 完整端到端驗過）
 - ≥ 5 GB 磁碟、≥ 4 GB RAM
-- **裝起來不需要 LLM key** — 可以選離線模式之後再補
+- **裝起來不需要 LLM key** — 可以選離線模式之後再補。沒填 key 時 `litellm` 會停在 `health: starting`，`scripts/doctor.sh` 會識別這個狀態並把警告降為提示（不是 hard fail）。這是預期行為，不會卡其他服務。
 
 ### 一條指令
 
@@ -107,7 +107,7 @@ MEMVAULT_TEST_BASE_URL=http://localhost:8080 \
   ./.e2e-venv/bin/python -m pytest tests/test_e2e_api.py -v
 ```
 
-預期：**42 / 42 全綠**。
+預期：**42 / 42 全綠**（macOS Apple Silicon 本機驗證 — CI 只跑 unit + install regression suite，e2e suite 需要真實 docker compose stack，留作 dev 驗證 / nightly job）。
 
 ---
 

@@ -474,6 +474,14 @@ async def test_kg_triple_delete_returns_2xx(httpx_client: httpx.AsyncClient):
 
 
 async def test_kg_triple_batch_insert(httpx_client: httpx.AsyncClient):
+    """Batch insert via TripleBatchCreate schema (session_id + triples list).
+
+    Contract: `/api/memvault/kg/triples/batch` accepts TripleBatchCreate —
+    a dict with REQUIRED session_id plus a triples list. Earlier versions of
+    this test sent both `{"triples": [...]}` and a bare list; both 422'd
+    because session_id was missing.
+    """
+    session_id = f"e2e_batch_session_{uuid.uuid4().hex[:8]}"
     triples = [
         {
             "subject": f"e2e_batch_{uuid.uuid4().hex[:6]}_{i}",
@@ -482,16 +490,14 @@ async def test_kg_triple_batch_insert(httpx_client: httpx.AsyncClient):
         }
         for i in range(3)
     ]
-    # Try common batch shapes — a real bug would be route only accepting one.
-    for body_shape in [{"triples": triples}, triples]:
-        r = await httpx_client.post(
-            "/api/memvault/kg/triples/batch", json=body_shape
-        )
-        if r.status_code in (200, 201):
-            return  # success on at least one shape — done
-    pytest.fail(
-        f"batch insert rejected for both list and dict shapes — "
-        f"last status={r.status_code} body={r.text[:300]}"
+    body = {"session_id": session_id, "triples": triples}
+    r = await httpx_client.post("/api/memvault/kg/triples/batch", json=body)
+    assert r.status_code in (200, 201), (
+        f"batch insert rejected: status={r.status_code} body={r.text[:300]}"
+    )
+    payload = r.json()
+    assert payload.get("ingested") == 3, (
+        f"expected 3 ingested, got {payload!r}"
     )
 
 
@@ -549,7 +555,15 @@ async def test_batch_ingest_partial_dup_only_rolls_back_dup_row(
 
 
 async def test_kg_triple_search_by_predicate(httpx_client: httpx.AsyncClient):
-    """Seed a triple, then search by its predicate. Result must contain it."""
+    """Seed a triple, then search via the semantic endpoint with its predicate.
+
+    Contract: `/triples/search` takes `q=` (semantic query). When the
+    embedding service is unavailable the route falls back to
+    `search_by_predicate(q)`, so passing the predicate as `q` exercises both
+    paths uniformly. Earlier versions of this test used `?predicate=`,
+    which `/triples/search` does not accept (that param lives on `GET
+    /triples`, the list endpoint).
+    """
     pred = f"e2e_pred_{uuid.uuid4().hex[:8]}"
     body = {
         "subject": "alpha",
@@ -559,14 +573,15 @@ async def test_kg_triple_search_by_predicate(httpx_client: httpx.AsyncClient):
     rc = await httpx_client.post("/api/memvault/kg/triples", json=body)
     assert rc.status_code in (200, 201)
     rs = await httpx_client.get(
-        "/api/memvault/kg/triples/search", params={"predicate": pred}
+        "/api/memvault/kg/triples/search", params={"q": pred}
     )
     assert rs.status_code == 200, f"triple search not 200: {rs.status_code}"
     payload = rs.json()
     items = payload.get("items") if isinstance(payload, dict) else payload
     assert isinstance(items, list)
     if items:
-        # Invariant: every returned triple has the predicate we asked for.
+        # Invariant: in the predicate-fallback path every returned triple
+        # has the predicate we queried with.
         for t in items:
             assert isinstance(t, dict)
             assert t.get("predicate") == pred, (

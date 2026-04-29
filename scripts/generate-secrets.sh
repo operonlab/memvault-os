@@ -101,6 +101,12 @@ main() {
   fill_secret REDIS_PASSWORD 18
   fill_secret MEMVAULT_SECRET_KEY 32
   fill_secret LITELLM_MASTER_KEY 24
+  # WHY MINIO included: PowerShell sibling generate-secrets.ps1 already lists
+  # it; the frozen-tier compose override (docker-compose.frozen.yml) wires
+  # MinIO with `MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}`. Without seeding,
+  # `docker compose --profile frozen up` gets an empty password and refuses
+  # to start. Sole-tier installs ignore the value, so it's safe to always set.
+  fill_secret MINIO_ROOT_PASSWORD 24
   log "secrets 寫入完成 → ${ENV_FILE}"
 }
 

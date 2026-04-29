@@ -154,6 +154,10 @@ services:
       interval: 15s
       timeout: 5s
       retries: 10
+      # start_period covers uvicorn cold-start + alembic deps wiring; without
+      # it the install.sh 90s `wait_for_healthy` deadline races api boot on
+      # cold-cache machines and reports a phantom failure.
+      start_period: 30s
 
   worker:
     image: ghcr.io/operonlab/memvault-api:${VERSION:-latest}@${API_DIGEST}

@@ -43,6 +43,14 @@ err()   { printf "${RED}❌${RESET} %s\n" "$*" >&2; }
 info()  { printf "${BLUE}ℹ️${RESET}  %s\n" "$*"; }
 title() { printf "\n${BOLD}== %s ==${RESET}\n" "$*"; }
 
+# UI-to-stderr variants — for use INSIDE functions whose stdout is captured
+# via $() (e.g. prompt_llm_provider, prompt_new_port, read_api_key). Mixing
+# log/warn/info into a captured stdout stream pollutes the captured value
+# with menu text, ANSI escapes, or trailing newlines, breaking the contract
+# that "stdout = pure value, stderr = UI/diagnostics".
+warn_ui() { printf "${YELLOW}⚠️${RESET}  %s\n" "$*" >&2; }
+info_ui() { printf "${BLUE}ℹ️${RESET}  %s\n" "$*" >&2; }
+
 die() {
   err "$*"
   exit 1
@@ -213,7 +221,14 @@ prompt_llm_provider() {
   local choice
   while :; do
     # `read -p` already writes the prompt to stderr — no extra redirection needed.
-    read -r -p "選擇 [1-6]: " choice
+    # EOF guard: `read` returns non-zero when stdin closes (e.g. piped scripts,
+    # CI w/o tty). Without this guard `choice` stays empty, the case never
+    # matches, and we spin forever. Caller MUST handle non-zero by falling
+    # back to MEMVAULT_LLM_DEFERRED.
+    if ! read -r -p "選擇 [1-6]: " choice; then
+        warn_ui "stdin 結束，無法繼續互動 — 改用 MEMVAULT_SKIP_LLM=1 重跑或在 .env 補 LLM key 後執行 doctor.sh"
+        return 1
+    fi
     # Strip CR/LF — PTY drivers and Windows-line-ending stdin can leave \r
     # behind, and `read -r` does NOT strip \r (only \n). Without this,
     # case-match against "1|2|3|4|5|6" silently fails for "6\r".
@@ -221,7 +236,9 @@ prompt_llm_provider() {
     choice="${choice//$'\n'/}"
     case "${choice}" in
       1|2|3|4|5|6) printf '%s\n' "${choice}"; return 0 ;;
-      *) warn "請輸入 1-6" ;;
+      # WHY warn_ui (>&2): caller captures stdout via $(), any warn going to
+      # stdout would land inside ${choice} and pollute the next iteration.
+      *) warn_ui "請輸入 1-6" ;;
     esac
   done
 }
@@ -230,12 +247,27 @@ read_api_key() {
   local label="$1"
   local key=""
   while [[ -z "${key// /}" ]]; do
-    read -r -s -p "輸入 ${label}: " key
-    printf "\n"
+    # EOF guard — see prompt_llm_provider above. Returning non-zero lets
+    # configure_llm fall back to deferred mode instead of looping forever.
+    if ! read -r -s -p "輸入 ${label}: " key; then
+        # `read -s` swallows the trailing newline that the user would see —
+        # write our own newline + EOF notice to stderr so the next message
+        # doesn't glue itself to the prompt line.
+        printf '\n' >&2
+        warn_ui "stdin 結束，無法讀取 ${label} — 改用 MEMVAULT_SKIP_LLM=1 重跑或在 .env 直接寫入 ${label}"
+        return 1
+    fi
+    # WHY printf '\n' >&2 (NOT stdout): caller invokes us via
+    # `new_key="$(read_api_key …)"`, which captures stdout. Writing the
+    # post-read newline to stdout would append \n to the captured key, then
+    # set_env would write a multi-line .env entry that breaks subsequent
+    # awk/grep parsing in get_env / docker compose --env-file.
+    printf '\n' >&2
     # Strip CR — PTY / Windows line endings can leave \r behind and pollute
     # the API key. Same reason as prompt_llm_provider's choice handling.
     key="${key//$'\r'/}"
-    [[ -n "${key// /}" ]] || warn "key 不可為空"
+    # WHY warn_ui (>&2): same stdout-capture concern as the menu warn above.
+    [[ -n "${key// /}" ]] || warn_ui "key 不可為空"
   done
   printf '%s' "${key}"
 }
@@ -249,10 +281,20 @@ llm_smoke_test() {
   info "啟動 litellm container 進行 smoke test..."
   ( cd "${ROOT_DIR}" && docker compose up -d litellm >/dev/null )
 
+  # WHY helper: every `docker compose ... exec` MUST run from ROOT_DIR with
+  # `--env-file .env`. Otherwise (a) curl-pipe-bash invocation has cwd outside
+  # the repo, (b) ${COMPOSE_FILE} from .env is not honored, and (c) image
+  # variable substitution falls back to placeholder digests. Old code passed
+  # `-f "${ROOT_DIR}/infra/docker-compose.yml"` literally, which ignores the
+  # `.mac.yml` / `.gpu.yml` overrides chosen by detect_embedding_backend.
+  _dc_exec() {
+    ( cd "${ROOT_DIR}" && docker compose --env-file .env exec "$@" )
+  }
+
   info "等待 litellm health (最多 60s)..."
   local _i
   for _i in $(seq 1 30); do
-    if docker compose -f "${ROOT_DIR}/infra/docker-compose.yml" exec -T litellm \
+    if _dc_exec -T litellm \
         curl -fsS http://localhost:4000/health/liveliness >/dev/null 2>&1; then
       break
     fi
@@ -264,7 +306,7 @@ llm_smoke_test() {
   body=$(printf '{"model":"%s","messages":[{"role":"user","content":"ping"}],"max_tokens":4}' "${model_alias}")
 
   local resp
-  resp="$(docker compose -f "${ROOT_DIR}/infra/docker-compose.yml" exec -T litellm \
+  resp="$(_dc_exec -T litellm \
     curl -sS -w '\n__HTTP__:%{http_code}' \
     -H "Authorization: Bearer ${master_key}" \
     -H 'Content-Type: application/json' \
@@ -314,14 +356,28 @@ configure_llm() {
 
   while :; do
     local choice
-    choice="$(prompt_llm_provider)"
+    # WHY EOF fallback: prompt_llm_provider returns non-zero when stdin closes
+    # (CI / non-tty / piped install). Without falling back, install.sh would
+    # exit (set -e) and the user is stuck at "no LLM configured". Deferred
+    # mode keeps stack runnable; doctor.sh re-checks once .env has a key.
+    if ! choice="$(prompt_llm_provider)"; then
+      warn "互動式 LLM 選單無法執行 — 切換到離線模式（stack 仍會啟動，LLM 功能延後）"
+      set_env MEMVAULT_LLM_DEFERRED 1
+      info "稍後在 .env 填入任一 LLM key 後執行：bash scripts/doctor.sh"
+      return 0
+    fi
     local key_var=""
     local model_alias=""
     case "${choice}" in
-      1) key_var="OPENAI_API_KEY";    model_alias="openai/gpt-4o-mini" ;;
-      2) key_var="ANTHROPIC_API_KEY"; model_alias="anthropic/claude-haiku" ;;
-      3) key_var="GEMINI_API_KEY";    model_alias="gemini/gemini-1.5-flash" ;;
-      4) key_var="DEEPSEEK_API_KEY";  model_alias="deepseek/deepseek-chat" ;;
+      # WHY plain alias (not provider/model): smoke test hits LiteLLM proxy at
+      # /v1/chat/completions with model=<alias>. The aliases must match the
+      # `model_name:` entries in infra/litellm/config.yaml; passing
+      # `openai/gpt-4o-mini` would route LiteLLM to native provider mode and
+      # 404 even with a valid OPENAI_API_KEY because that alias is not declared.
+      1) key_var="OPENAI_API_KEY";    model_alias="gpt-4o-mini" ;;
+      2) key_var="ANTHROPIC_API_KEY"; model_alias="claude-haiku-4-5" ;;
+      3) key_var="GEMINI_API_KEY";    model_alias="gemini-2.0-flash" ;;
+      4) key_var="DEEPSEEK_API_KEY";  model_alias="deepseek-chat" ;;
       5)
         info "本地 Ollama 模式 — 確保 host 已跑 ollama serve 並 pull qwen2.5:7b"
         model_alias="ollama/qwen2.5:7b"
@@ -341,7 +397,14 @@ configure_llm() {
         info "${key_var} 已存在於 .env，沿用"
       else
         local new_key
-        new_key="$(read_api_key "${key_var}")"
+        # WHY EOF fallback: read_api_key returns non-zero on stdin EOF. Same
+        # reasoning as the prompt_llm_provider fallback above.
+        if ! new_key="$(read_api_key "${key_var}")"; then
+          warn "讀取 ${key_var} 中斷 — 切換到離線模式"
+          set_env MEMVAULT_LLM_DEFERRED 1
+          info "稍後在 .env 填入 ${key_var} 後執行：bash scripts/doctor.sh"
+          return 0
+        fi
         set_env "${key_var}" "${new_key}"
       fi
     fi
@@ -352,6 +415,14 @@ configure_llm() {
       return 0
     fi
 
+    # SHOULD-FIX 11 — clear the bad key so the next loop iteration prompts
+    # for a fresh value instead of silently re-using the failed one. Without
+    # this, picking the same provider again hits "${key_var} 已存在於 .env，沿用"
+    # and re-uses the failing key, masking the real fix path (re-enter key).
+    if [[ -n "${key_var}" ]]; then
+      set_env "${key_var}" ""
+      info "已清除 ${key_var}（smoke test 失敗，下次選同 provider 會重新詢問 key）"
+    fi
     warn "smoke test 未通過，請重新選擇或更換 key（或選 6 暫時跳過）"
   done
 }
@@ -526,9 +597,11 @@ run_migrations() {
   pg_user="$(get_env POSTGRES_USER || echo memvault)"
   pg_db="$(get_env POSTGRES_DB || echo memvault)"
   local count
-  count="$(docker compose -f "${ROOT_DIR}/infra/docker-compose.yml" exec -T postgres \
+  # WHY cd ROOT_DIR + --env-file: same reason as llm_smoke_test's _dc_exec —
+  # honor COMPOSE_FILE override + work when invoked from outside the repo.
+  count="$( ( cd "${ROOT_DIR}" && docker compose --env-file .env exec -T postgres \
     psql -U "${pg_user}" -d "${pg_db}" -tA \
-    -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='memvault';" \
+    -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='memvault';" ) \
     2>/dev/null | tr -d '[:space:]' || echo 0)"
   if [[ "${count}" =~ ^[0-9]+$ ]] && (( count >= 16 )); then
     log "memvault schema 共 ${count} 張表（預期 ≥16）"

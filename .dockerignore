@@ -1,0 +1,65 @@
+# memvault-os — repo-root .dockerignore
+#
+# WHY: api/worker images use repo-root build context (so apps/api/Dockerfile
+# can COPY apps/worker/). Without this file the context is ~537 MB (apps/api/
+# .venv alone is 514 MB), AND .env / secret files leak into image layers.
+# Keep this list aggressive — only the directories the Dockerfile actually
+# COPY's are needed.
+
+# Local secrets — MUST exclude
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# Git metadata
+.git/
+.gitignore
+.gitattributes
+
+# Python venvs / caches
+**/.venv/
+**/.e2e-venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+**/*.egg-info/
+
+# Node / web build artifacts (web has its own context, but defense-in-depth)
+**/node_modules/
+**/dist/
+**/build/
+
+# Docker meta
+.dockerignore
+docker-compose*.override.yml
+
+# Worktrees + scratch
+.worktrees/
+.claude/
+outputs/
+models/
+**/*.log
+**/*.bak
+
+# Docs (not needed in runtime image)
+README*.md
+docs/
+*.md
+LICENSE
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS junk
+.DS_Store
+Thumbs.db

@@ -35,6 +35,13 @@ warn() { printf "${YELLOW}⚠️${RESET}  %s\n" "$*"; }
 err()  { printf "${RED}❌${RESET} %s\n" "$*" >&2; }
 hint() { printf "   ${BOLD}提示：${RESET}%s\n" "$*"; }
 
+# UI-to-stderr variants for use INSIDE functions captured via $(). Mixing
+# warn/log into stdout pollutes the captured value (e.g. a port number) with
+# emoji + ANSI escapes, then `${new_port}` written into .env breaks all
+# downstream `awk -F= … {print}` parsing. Same convention as install.sh.
+warn_ui() { printf "${YELLOW}⚠️${RESET}  %s\n" "$*" >&2; }
+err_ui()  { printf "${RED}❌${RESET} %s\n" "$*" >&2; }
+
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
@@ -104,33 +111,49 @@ port_in_use() {
 }
 
 prompt_new_port() {
+  # CONTRACT (revised):
+  #   stdout: ONLY a valid new port number on success; nothing on failure.
+  #   return: 0 on success, 1 on failure (NONINTERACTIVE / EOF / user-cancel).
+  #   side effects: NONE — caller (check_port) is responsible for setting
+  #     HARD_FAIL=1 on non-zero return. The OLD design tried to set HARD_FAIL=1
+  #     inside this function, but bash $() runs the function in a subshell, so
+  #     the assignment was discarded as soon as $() returned. Symptom: WEB/API
+  #     port conflict + non-interactive ⇒ HARD_FAIL stayed 0, install
+  #     continued, docker compose pull bound a still-occupied port and failed.
+  #
+  # All UI/error output goes to stderr (warn_ui / err_ui). The OLD design
+  # used warn() which writes to stdout, polluting the captured port value
+  # with emoji + ANSI escapes — write_env_port then wrote a garbage line
+  # like `WEB_PORT=⚠️ port 6 也被佔用` into .env.
   local label="$1"
   local current="$2"
   local new_port=""
   if [[ "${NONINTERACTIVE}" == "1" ]]; then
-    err "${label} port ${current} 被佔用，且當前為非互動模式"
-    HARD_FAIL=1
-    printf '%s\n' "${current}"
+    err_ui "${label} port ${current} 被佔用，且當前為非互動模式"
     return 1
   fi
   while :; do
-    read -r -p "請輸入新的 ${label} port（1024-65535，留空中止）: " new_port
+    # EOF guard — see install.sh prompt_llm_provider. `read` returning
+    # non-zero on closed stdin must surface as a failure return, not an
+    # infinite loop with empty new_port.
+    if ! read -r -p "請輸入新的 ${label} port（1024-65535，留空中止）: " new_port; then
+      err_ui "stdin 結束，無法解決 ${label} port ${current} 衝突"
+      return 1
+    fi
     # Strip CR — PTY / Windows line endings leave \r and break the regex
     # match below (`6\r` does not match ^[0-9]+$).
     new_port="${new_port//$'\r'/}"
     new_port="${new_port//$'\n'/}"
     if [[ -z "${new_port}" ]]; then
-      err "${label} port 衝突未解決"
-      HARD_FAIL=1
-      printf '%s\n' "${current}"
+      err_ui "${label} port 衝突未解決（使用者中止）"
       return 1
     fi
     if ! [[ "${new_port}" =~ ^[0-9]+$ ]] || (( new_port < 1024 || new_port > 65535 )); then
-      warn "port 範圍需為 1024-65535"
+      warn_ui "port 範圍需為 1024-65535"
       continue
     fi
     if port_in_use "${new_port}"; then
-      warn "port ${new_port} 也被佔用"
+      warn_ui "port ${new_port} 也被佔用"
       continue
     fi
     printf '%s\n' "${new_port}"
@@ -179,7 +202,14 @@ check_port() {
   fi
   warn "${label} port ${current} 已被佔用"
   local new_port
-  new_port="$(prompt_new_port "${label}" "${current}")" || return 1
+  # WHY HARD_FAIL=1 here (not inside prompt_new_port): assignment inside
+  # `$()` runs in a subshell and is lost. We MUST detect failure in the
+  # parent shell and set HARD_FAIL here. Without this gate, an unresolved
+  # port conflict would still fall through to `pre-flight 全部通過`.
+  if ! new_port="$(prompt_new_port "${label}" "${current}")"; then
+    HARD_FAIL=1
+    return 1
+  fi
   write_env_port "${var}" "${new_port}"
   log "${label} port → ${new_port}（已寫入 .env）"
   case "${var}" in

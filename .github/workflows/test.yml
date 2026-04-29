@@ -102,6 +102,28 @@ jobs:
             echo "::warning::alembic.ini not found, skipping migrations"
           fi
 
+      - name: Verify memvault schema tables created
+        # WHY: bug H regressed silently because alembic upgrade printed
+        # "Running upgrade" + exited 0 but created ZERO tables (CREATE SCHEMA
+        # outside begin_transaction → async-conn rollback). A green "alembic
+        # upgrade head" step is therefore not enough — assert the table count.
+        # Baseline migration creates 17 tables in the memvault schema plus
+        # alembic_version (=18); we floor at 16 to allow 1-2 future drops.
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+          count=$(PGPASSWORD="${POSTGRES_PASSWORD}" psql \
+            -h "${POSTGRES_HOST}" -p "${POSTGRES_PORT}" \
+            -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+            -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='memvault'")
+          echo "Tables in memvault schema: ${count}"
+          if [ "${count}" -lt 16 ]; then
+            echo "::error::alembic upgrade reported success but only ${count} tables created (expected ≥16). Bug H regression — CREATE SCHEMA likely escaped begin_transaction()."
+            exit 1
+          fi
+
       - name: Run pytest (unit + install-script regression)
         working-directory: apps/api
         # test_e2e_api.py needs a running docker-compose stack and is run

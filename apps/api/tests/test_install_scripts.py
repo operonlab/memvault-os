@@ -275,12 +275,14 @@ def test_interactive_reads_strip_cr():
             text,
         ):
             var = m.group(1)
-            tail = text[m.end() : m.end() + 600]
+            # Window of 1200 chars accommodates the EOF-guard branch + WHY
+            # comments that legitimately sit between the read and the strip.
+            tail = text[m.end() : m.end() + 1200]
             # Heuristic: in tail, must contain both the var name and \r notation.
             if r"\r" not in tail or var not in tail:
                 failures.append(
                     f"{path.name}: `read -r -p ... {var}` is not followed "
-                    f"by any CR-strip on {var} within 600 chars"
+                    f"by any CR-strip on {var} within 1200 chars"
                 )
     assert not failures, (
         "missing \\r strip after interactive read calls:\n  - "
@@ -339,6 +341,28 @@ def test_api_image_bundles_worker_module():
 # ---------------------------------------------------------------------------
 # Bug H — alembic env.py must run CREATE SCHEMA inside begin_transaction()
 # ---------------------------------------------------------------------------
+def _is_create_schema_call(node) -> bool:
+    """True iff `node` is a call to `connection.execute(text("CREATE SCHEMA..."))`
+    (or any execute() whose first arg's source contains 'CREATE SCHEMA').
+    """
+    import ast
+
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    # Must be `<something>.execute(...)`.
+    if not (isinstance(func, ast.Attribute) and func.attr == "execute"):
+        return False
+    if not node.args:
+        return False
+    arg = node.args[0]
+    try:
+        src = ast.unparse(arg)
+    except Exception:
+        return False
+    return "CREATE SCHEMA" in src.upper()
+
+
 def test_alembic_env_creates_schema_inside_transaction():
     """alembic env.py do_run_migrations must keep CREATE SCHEMA inside the
     `with context.begin_transaction():` block.
@@ -352,36 +376,63 @@ def test_alembic_env_creates_schema_inside_transaction():
     DDL. Symptom: `alembic upgrade head` exits 0 and prints "Running upgrade",
     but 0 tables get created and `alembic_version` does not exist.
 
-    Static check: do_run_migrations must contain `CREATE SCHEMA` only after
-    the `with context.begin_transaction()` line, not before.
+    AST-based check (replaces the original line-order regex which a
+    re-indent could trivially fool): walk do_run_migrations, find every
+    `connection.execute(text("CREATE SCHEMA …"))`, and assert every single
+    one is *inside* the `with context.begin_transaction():` block.
     """
+    import ast
+
     env_py = (REPO_ROOT / "apps" / "api" / "alembic" / "env.py").read_text()
-    fn = re.search(
-        r"def do_run_migrations\([^)]*\)[^:]*:(.+?)(?=^def |\Z)",
-        env_py,
-        re.M | re.S,
+    tree = ast.parse(env_py)
+
+    target_fn = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "do_run_migrations":
+            target_fn = node
+            break
+    assert target_fn is not None, "alembic/env.py: do_run_migrations() not found"
+
+    # Find the `with context.begin_transaction():` block at any depth.
+    txn_with: ast.With | None = None
+    for node in ast.walk(target_fn):
+        if not isinstance(node, ast.With):
+            continue
+        for item in node.items:
+            ctx = item.context_expr
+            if (
+                isinstance(ctx, ast.Call)
+                and isinstance(ctx.func, ast.Attribute)
+                and ctx.func.attr == "begin_transaction"
+            ):
+                txn_with = node
+                break
+        if txn_with is not None:
+            break
+    assert txn_with is not None, (
+        "do_run_migrations must use `with context.begin_transaction():`"
     )
-    assert fn, "alembic/env.py: do_run_migrations() not found"
-    body = fn.group(1)
-    # Strip comments so we don't match the prose explanation that itself
-    # mentions "CREATE SCHEMA" / "begin_transaction()" verbatim.
-    body_no_comments = re.sub(r"#[^\n]*", "", body)
-    txn_match = re.search(r"context\.begin_transaction\(\)", body_no_comments)
-    schema_match = re.search(
-        r"connection\.execute\([^)]*CREATE\s+SCHEMA",
-        body_no_comments,
+
+    inside_calls = [n for n in ast.walk(txn_with) if _is_create_schema_call(n)]
+
+    # Walk everything in do_run_migrations EXCEPT the txn_with subtree.
+    # Set lookup uses object identity (id()) which is the right semantic
+    # here — we want to exclude the exact subtree, not value-equal nodes.
+    inside_ids = {id(n) for n in ast.walk(txn_with)}
+    outside_calls = [
+        n
+        for n in ast.walk(target_fn)
+        if id(n) not in inside_ids and _is_create_schema_call(n)
+    ]
+
+    assert inside_calls, (
+        "do_run_migrations must call `connection.execute(... CREATE SCHEMA ...)` "
+        "inside the begin_transaction() block."
     )
-    assert txn_match, (
-        "do_run_migrations must call context.begin_transaction()"
-    )
-    assert schema_match, (
-        "do_run_migrations must call connection.execute(... CREATE SCHEMA ...)"
-    )
-    assert schema_match.start() > txn_match.start(), (
-        "CREATE SCHEMA must be INSIDE the begin_transaction() block, "
-        "not before it. Otherwise the auto-begun transaction prevents "
-        "alembic from owning a transaction it can commit, and the async "
-        "connection release rolls back all migration DDL silently."
+    assert not outside_calls, (
+        "CREATE SCHEMA must be INSIDE begin_transaction(); found "
+        f"{len(outside_calls)} call(s) outside the transaction. The "
+        "auto-begun transaction will swallow the migration DDL on close."
     )
 
 
@@ -490,4 +541,193 @@ def test_configure_llm_supports_skip_or_offline():
     assert has_env_skip or has_interactive_skip, (
         "configure_llm must allow offline / skip via env var or "
         "interactive option — otherwise users without keys are blocked."
+    )
+
+
+# ===========================================================================
+# v1.0.1-rc2 regression tests — codex review fallout
+# ===========================================================================
+
+
+def test_dockerignore_excludes_secrets_and_venvs():
+    """`.dockerignore` at repo root must exclude .env*, .venv, .git, etc.
+
+    Bug N (codex slice 2): api build context was switched to repo root so the
+    Dockerfile can COPY apps/worker/. Without a .dockerignore, the context
+    balloons (apps/api/.venv alone is 514 MB) AND `.env` ends up in build
+    layers, leaking POSTGRES_PASSWORD / OPENAI_API_KEY into image history.
+    """
+    p = REPO_ROOT / ".dockerignore"
+    assert p.exists(), ".dockerignore at repo root is required for safe build context"
+    text = p.read_text()
+    must_have = [".env", ".venv", ".git/", "__pycache__"]
+    missing = [tok for tok in must_have if tok not in text]
+    assert not missing, f".dockerignore missing critical entries: {missing}"
+
+
+def test_api_dockerfile_pins_uv():
+    """apps/api/Dockerfile must pin uv to a specific version.
+
+    Bug O (codex slice 2): bare `pip install uv` resolves whatever PyPI has
+    today, making fallback build mode non-reproducible — a future uv release
+    that breaks `pip compile` would silently break new installs.
+    """
+    text = (REPO_ROOT / "apps" / "api" / "Dockerfile").read_text()
+    assert re.search(r"pip install[^\n]*'uv==[\d.]+'", text), (
+        "apps/api/Dockerfile must pin uv with `pip install 'uv==X.Y.Z'`"
+    )
+
+
+def test_compose_api_healthcheck_has_start_period():
+    """api healthcheck must declare start_period so install.sh's 90s health
+    deadline doesn't race the api's cold-start window (uvicorn boot + alembic
+    deps wiring can easily exceed 30s).
+    """
+    import yaml
+    data = yaml.safe_load(
+        (REPO_ROOT / "infra" / "docker-compose.yml").read_text()
+    )
+    api_hc = (data.get("services") or {}).get("api", {}).get("healthcheck") or {}
+    assert "start_period" in api_hc, (
+        "infra/docker-compose.yml api.healthcheck must set start_period"
+    )
+
+
+def test_generate_secrets_includes_minio():
+    """shell generate-secrets.sh must seed MINIO_ROOT_PASSWORD (PowerShell
+    sibling already does). Frozen-tier compose override needs it; without
+    seeding `docker compose --profile frozen up` fails."""
+    text = (SCRIPTS / "generate-secrets.sh").read_text()
+    assert re.search(r"fill_secret\s+MINIO_ROOT_PASSWORD\b", text), (
+        "scripts/generate-secrets.sh must call `fill_secret MINIO_ROOT_PASSWORD`"
+    )
+
+
+def test_no_hardcoded_litellm_localhost_in_app_code():
+    """No app-code site may hardcode `http://localhost:4000`.
+
+    Bug M (codex slice 2): llm_config.py (and 3 sibling extractors) used
+    a literal localhost:4000 + dev master key, ignoring compose-injected
+    LITELLM_BASE / LITELLM_KEY. Result: even after the user supplied a
+    valid OPENAI_API_KEY, every LLM call from api/worker hit the *current
+    container's* localhost (nothing) and 503'd.
+    """
+    src_root = REPO_ROOT / "apps" / "api" / "src"
+    bad: list[str] = []
+    for py in src_root.rglob("*.py"):
+        text = py.read_text()
+        for m in re.finditer(r'"http://localhost:4000[^"]*"', text):
+            # Allow comments-only references; exclude lines that start with #
+            line_start = text.rfind("\n", 0, m.start()) + 1
+            line = text[line_start : text.find("\n", m.start())]
+            if line.lstrip().startswith("#"):
+                continue
+            bad.append(f"{py.relative_to(REPO_ROOT)}: {line.strip()[:100]}")
+    assert not bad, (
+        "literal http://localhost:4000 must not appear in app code:\n  - "
+        + "\n  - ".join(bad)
+    )
+
+
+def test_llm_config_reads_litellm_base_env():
+    """apps/api/src/memvault/llm_config.py must read LITELLM_BASE from env."""
+    text = (
+        REPO_ROOT / "apps" / "api" / "src" / "memvault" / "llm_config.py"
+    ).read_text()
+    assert re.search(
+        r'os\.environ\.get\(\s*["\']LITELLM_BASE["\']', text
+    ) or re.search(
+        r'os\.getenv\(\s*["\']LITELLM_BASE["\']', text
+    ), "llm_config.py must read LITELLM_BASE via os.environ.get/getenv"
+
+
+def test_install_sh_smoke_uses_litellm_aliases():
+    """install.sh's smoke test model_alias must match aliases declared in
+    infra/litellm/config.yaml model_list. Otherwise the proxy returns
+    `Model not found` even when the provider key works (codex must-fix 7).
+    """
+    import yaml
+    cfg = yaml.safe_load(
+        (REPO_ROOT / "infra" / "litellm" / "config.yaml").read_text()
+    )
+    aliases = {m["model_name"] for m in (cfg.get("model_list") or [])}
+    text = (SCRIPTS / "install.sh").read_text()
+    used = set()
+    for m in re.finditer(r'model_alias="([^"]+)"', text):
+        val = m.group(1)
+        # Skip ollama/qwen2.5:7b — host-side fallback handled separately.
+        # Skip "$1" — that's the function parameter binding in
+        # `llm_smoke_test()`, not an actual alias.
+        if val.startswith("ollama/") or val.startswith("$"):
+            continue
+        used.add(val)
+    missing = used - aliases
+    assert not missing, (
+        f"install.sh smoke uses aliases not in litellm config: {missing}; "
+        f"available: {sorted(aliases)}"
+    )
+
+
+def test_doctor_uses_dotenv_helper_for_llm_deferred():
+    """scripts/doctor.sh must read MEMVAULT_LLM_DEFERRED via the
+    read_dotenv_value helper (sources scripts/_dotenv.sh).
+
+    The naïve `awk -F= '$1==KEY{print $2}'` parser was found to misjudge
+    `=1`, `=` empty, `=1 # comment`, and `# KEY=1` (codex must-fix 9).
+    """
+    doctor = (SCRIPTS / "doctor.sh").read_text()
+    assert re.search(r"source\s+[\"']?\$\{?SCRIPT_DIR\}?[/\"']?[^\n]*_dotenv\.sh", doctor) or \
+           "_dotenv.sh" in doctor, (
+        "scripts/doctor.sh must source scripts/_dotenv.sh"
+    )
+    assert re.search(
+        r'LLM_DEFERRED="\$\(read_dotenv_value\s+MEMVAULT_LLM_DEFERRED\)"',
+        doctor,
+    ), "doctor.sh must read MEMVAULT_LLM_DEFERRED via read_dotenv_value, not raw awk"
+
+
+def test_doctor_retries_litellm_when_provider_key_set():
+    """When the user has supplied an LLM provider key, doctor.sh must retry
+    litellm /health/liveliness instead of failing on the first 503.
+
+    Otherwise the documented recovery flow (`docker compose restart litellm
+    && bash scripts/doctor.sh`) gives a misleading red within the first
+    few seconds before litellm finishes boot (codex must-fix 10).
+    """
+    doctor = (SCRIPTS / "doctor.sh").read_text()
+    assert re.search(
+        r"HAS_PROVIDER_KEY", doctor
+    ), "doctor.sh must derive HAS_PROVIDER_KEY by scanning provider env keys"
+    assert re.search(
+        r"for\s+i\s+in\s+\$\(seq\s+1\s+\$\{?RETRIES\}?\)|sleep\s+\d+", doctor
+    ), "doctor.sh must retry-with-sleep when probing litellm health"
+
+
+def test_readme_blocker_count_matches_letter_set():
+    """README must say `11 ... blockers / 阻塞點` (A-H + J/K/L) — earlier text
+    said `12` which mismatches the actual eleven letters (we skip `I`).
+    """
+    patterns = {
+        "README.md": r"11[^0-9].{0,40}blocker",
+        "README.zh.md": r"11[^0-9].{0,40}阻塞點",
+    }
+    for fname, pat in patterns.items():
+        text = (REPO_ROOT / fname).read_text()
+        assert re.search(pat, text), (
+            f"{fname}: must say 11 blockers / 阻塞點 (not 12); we use "
+            f"letters A-H, J-L (skip I) → 11 total"
+        )
+
+
+def test_ci_verifies_table_count_after_alembic():
+    """CI must assert table count after `alembic upgrade head`.
+
+    Bug H regressed silently because alembic exited 0 with zero tables.
+    A green upgrade step is therefore not enough — assert that the
+    memvault schema actually populated.
+    """
+    text = (REPO_ROOT / ".github" / "workflows" / "test.yml").read_text()
+    assert "information_schema.tables" in text, (
+        ".github/workflows/test.yml must SELECT count(*) FROM information_schema.tables "
+        "WHERE table_schema='memvault' after alembic upgrade head"
     )

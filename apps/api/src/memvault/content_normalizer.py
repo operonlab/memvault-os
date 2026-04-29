@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
 
 import httpx
 
@@ -34,8 +35,12 @@ logger = logging.getLogger(__name__)
 __all__ = ["ContentNormalizerPipeline", "NormContext", "NormResult"]
 
 # --- LLM Refinement Config ---
-_LLM_URL = "http://localhost:4000/v1/chat/completions"
-_LLM_API_KEY = "sk-litellm-local-dev"  # nosec — local dev proxy key
+# LITELLM_BASE / LITELLM_KEY env vars allow docker-compose to inject the
+# in-cluster service name (`http://litellm:4000/v1`). Defaults are local-shell
+# fallbacks; production reads env-injected values.
+_LLM_BASE = os.environ.get("LITELLM_BASE", "http://litellm:4000/v1").rstrip("/")
+_LLM_URL = f"{_LLM_BASE}/chat/completions"
+_LLM_API_KEY = os.environ.get("LITELLM_KEY", "sk-litellm-local-dev")  # nosec — local dev fallback
 _LLM_MODEL = "gemini-2.5-flash"
 _LLM_TIMEOUT = 15
 

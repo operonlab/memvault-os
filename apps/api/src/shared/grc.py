@@ -21,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -174,8 +175,10 @@ def rlm_reflect_default(
     *,
     model: str = "grok-4-fast",
     max_iterations: int = 10,
-    api_base: str = "http://localhost:4000/v1",
-    api_key: str = "sk-litellm-local-dev",
+    # Defaults read compose-injected LITELLM_BASE / LITELLM_KEY at import
+    # time so api/worker containers reach the in-network litellm proxy.
+    api_base: str = os.environ.get("LITELLM_BASE", "http://litellm:4000/v1"),
+    api_key: str = os.environ.get("LITELLM_KEY", "sk-litellm-local-dev"),
 ) -> ReflectResult:
     """Default RLM-powered reflect implementation that modules can reuse.
 

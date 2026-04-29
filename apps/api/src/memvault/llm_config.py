@@ -1,12 +1,16 @@
 """Memvault LLM configuration — PydanticAI model factories.
 
 Backends:
-  - LiteLLM (localhost:4000): proxy to external models (primary)
+  - LiteLLM (proxy): URL+key read from LITELLM_BASE / LITELLM_KEY env vars.
+    In docker-compose stacks this resolves to ``http://litellm:4000/v1`` and
+    the master key from ``.env``. The hard-coded ``localhost:4000`` default
+    is only used for `pytest` outside compose; production never reads it.
   - DeepSeek (external): configurable via env vars (kg_auto_evolve)
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -18,8 +22,53 @@ from pydantic_ai.providers.openai import OpenAIProvider
 logger = logging.getLogger(__name__)
 
 # ── Backend endpoints ──
-_LITELLM_BASE = "http://localhost:4000/v1"
-_LITELLM_KEY = "sk-litellm-local-dev"  # nosec — local dev proxy key
+# Read from env so docker-compose can inject the in-cluster service name.
+# Fallback `localhost:4000` only valid for local pytest / dev shell.
+_LITELLM_BASE = os.environ.get("LITELLM_BASE", "http://litellm:4000/v1")
+_LITELLM_KEY = os.environ.get("LITELLM_KEY", "sk-litellm-local-dev")  # nosec — local dev proxy key
+
+# Retry budget for litellm cold-start / 503 storms. 1+2+4+8+16 = 31s total.
+_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 16.0)
+
+
+async def litellm_post_with_retry(
+    path: str,
+    *,
+    json: dict,
+    headers: dict | None = None,
+    timeout: float = 30.0,
+    base_url: str | None = None,
+) -> httpx.Response:
+    """POST to LiteLLM with exponential backoff on connection-refused / 503.
+
+    Retries up to 5 times (1, 2, 4, 8, 16 seconds). Re-raises on the final
+    failure so callers can translate to HTTP 503 for the user; the worker
+    process itself never crashes from a transient LiteLLM hiccup.
+    """
+    base = base_url or _LITELLM_BASE
+    url = base.rstrip("/") + "/" + path.lstrip("/")
+    last_exc: Exception | None = None
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for attempt, delay in enumerate((0.0, *_RETRY_DELAYS)):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                resp = await client.post(url, json=json, headers=headers or {})
+            except (httpx.ConnectError, httpx.ReadError) as exc:
+                last_exc = exc
+                logger.warning(
+                    "litellm.post: connection error attempt=%s err=%s", attempt, exc
+                )
+                continue
+            if resp.status_code == 503:
+                logger.warning("litellm.post: 503 attempt=%s", attempt)
+                last_exc = httpx.HTTPStatusError(
+                    "503 from LiteLLM", request=resp.request, response=resp
+                )
+                continue
+            return resp
+    assert last_exc is not None
+    raise last_exc
 
 # ── LiteLLM model resolution ──
 _MODEL_CANDIDATES = [

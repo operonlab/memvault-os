@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -125,8 +126,10 @@ def _parse_json_fallback(text: str) -> Any:
 async def extract_triples(
     content: str,
     *,
-    llm_base_url: str = "http://localhost:4000/v1",
-    llm_api_key: str = "sk-litellm-local-dev",
+    # Defaults read compose-injected LITELLM_BASE / LITELLM_KEY at import
+    # time; container default `litellm:4000` is the in-network hostname.
+    llm_base_url: str = os.environ.get("LITELLM_BASE", "http://litellm:4000/v1"),
+    llm_api_key: str = os.environ.get("LITELLM_KEY", "sk-litellm-local-dev"),
     model: str = "deepseek-v3",
     predicate_vocabulary: dict[str, list[str]] | None = None,
     predicate_hint: str = "Use all available predicates as appropriate.",
