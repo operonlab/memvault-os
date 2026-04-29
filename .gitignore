@@ -5,6 +5,10 @@
 *.pem
 *.key
 
+# Playwright CLI scratch — local browser snapshots / console logs from
+# `playwright-cli` invocations during dev verification; not source of truth.
+.playwright-cli/
+
 # Python
 __pycache__/
 *.py[cod]
