@@ -1,0 +1,77 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]: MemVault記憶金庫
+    - navigation [ref=e6]:
+      - link "記憶瀏覽" [ref=e7] [cursor=pointer]:
+        - /url: /memvault
+        - img [ref=e8]
+        - text: 記憶瀏覽
+      - link "星系圖" [ref=e12] [cursor=pointer]:
+        - /url: /memvault/galaxy
+        - img [ref=e13]
+        - text: 星系圖
+  - main [ref=e16]:
+    - generic [ref=e17]:
+      - button "KAS 狀態" [ref=e19]
+      - generic [ref=e20]:
+        - button "Fast Memory 最小負荷、最快取用" [ref=e21]:
+          - generic [ref=e22]: Fast Memory
+          - generic [ref=e23]: 最小負荷、最快取用
+        - button "Working Memory 當前任務上下文" [ref=e24]:
+          - generic [ref=e25]: Working Memory
+          - generic [ref=e26]: 當前任務上下文
+        - button "Deep Memory 完整證據與圖譜" [ref=e27]:
+          - generic [ref=e28]: Deep Memory
+          - generic [ref=e29]: 完整證據與圖譜
+        - button "Skills 能力與態度演化" [ref=e30]:
+          - generic [ref=e31]: Skills
+          - generic [ref=e32]: 能力與態度演化
+      - generic [ref=e33]:
+        - generic [ref=e34]:
+          - generic [ref=e35]:
+            - paragraph [ref=e36]: fast memory
+            - generic [ref=e38]:
+              - heading "最小負荷、最快取用" [level=2] [ref=e39]
+              - paragraph [ref=e40]: 輸入查詢後，系統會組裝對應層級記憶。
+          - generic [ref=e42]:
+            - textbox "搜尋記憶..." [ref=e43]
+            - button "搜尋" [disabled] [ref=e44]
+          - generic [ref=e45]:
+            - generic [ref=e46]:
+              - text: Task
+              - combobox "Task" [ref=e47]:
+                - option "Lookup"
+                - option "Decide"
+                - option "Build" [selected]
+                - option "Reflect"
+            - generic [ref=e48]:
+              - text: Thinking
+              - combobox "Thinking" [ref=e49]:
+                - option "Auto" [selected]
+                - option "Fast"
+                - option "Slow"
+            - generic [ref=e50]:
+              - text: Load Budget
+              - combobox "Load Budget" [ref=e51]:
+                - option "Light"
+                - option "Standard" [selected]
+                - option "Deep"
+          - paragraph [ref=e53]: 輸入查詢後，Fast Memory 會回傳最小負荷的可用知識卡。
+        - generic [ref=e54]:
+          - generic [ref=e56]:
+            - generic [ref=e57]:
+              - heading "KAS 能力圖譜" [level=2] [ref=e58]
+              - button "查看說明" [ref=e60]: "?"
+            - button "重新計算" [ref=e61]
+          - generic [ref=e62]:
+            - heading "Session 掃描" [level=3] [ref=e63]
+            - button "掃描 Session" [ref=e64] [cursor=pointer]
+  - navigation [ref=e65]:
+    - link "記憶瀏覽" [ref=e66] [cursor=pointer]:
+      - /url: /memvault
+      - img [ref=e67]
+      - text: 記憶瀏覽
+    - link "星系圖" [ref=e71] [cursor=pointer]:
+      - /url: /memvault/galaxy
+      - img [ref=e72]
+      - text: 星系圖

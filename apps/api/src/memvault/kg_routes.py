@@ -472,6 +472,66 @@ async def auto_merge_entities(
     }
 
 
+# ======================== Attitudes ========================
+
+
+@router.get("/attitudes")
+async def list_attitudes(
+    space_id: str = Query("default"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    _user: dict = require_permission("memvault.read"),
+):
+    """List blocks of `block_type='attitude'` for the KAS chart.
+
+    The frontend's "KAS 能力圖譜" panel polls this endpoint on every page
+    load. v1.0.0 / v1.0.1 didn't expose it, so the UI rendered with five
+    `console.error` entries on a fresh install (cosmetic — the chart
+    itself fell back to attitude=0 gracefully).
+
+    This is a thin pass-through over `MemoryBlock` filtered by
+    block_type — same shape as the standard `/blocks` listing so the
+    frontend's existing pagination renderer works without changes.
+    The richer "Attitude system" (with risk/decision_style/communication
+    sub-axes from src.memvault.README) is intentionally out of scope
+    for v1.0.x and lands in v1.1.
+    """
+    from sqlalchemy import func, select
+
+    from .models import MemoryBlock
+
+    base_q = (
+        select(MemoryBlock)
+        .where(
+            MemoryBlock.space_id == space_id,
+            MemoryBlock.block_type == "attitude",
+            MemoryBlock.deleted_at.is_(None),
+        )
+        .order_by(MemoryBlock.created_at.desc())
+    )
+    total_q = select(func.count()).select_from(base_q.subquery())
+    total = (await db.execute(total_q)).scalar_one()
+    items_q = base_q.offset((page - 1) * page_size).limit(page_size)
+    items = (await db.execute(items_q)).scalars().all()
+    return {
+        "items": [
+            {
+                "id": b.id,
+                "content": b.content,
+                "tags": list(b.tags or []),
+                "confidence": b.confidence,
+                "created_at": b.created_at.isoformat() if b.created_at else None,
+                "updated_at": b.updated_at.isoformat() if b.updated_at else None,
+            }
+            for b in items
+        ],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
 # ======================== Graph Traversal ========================
 
 
